@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<!--
+  reBot 驾驶舱（V2 UI · 真功能）
+  [Built by fanhao375 2026-06-30] 不改 index.html / ros 脚本。加载的是真脚本，真功能（ROS 连接/使能/重力补偿/夹爪/遥操/诊断/示教/IK）照常工作。
+  在原控件之上套了 V2 导航栏/顶栏/旅程页 + viewport 点选&幽灵叠加层。rebot-sim.js 仅加了几行只读 getter（纯新增）。
+  回退：删本文件（cockpit.html）+ `git checkout rebot-sim.js`，即回到老界面 index.html。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>reBot 驾驶舱 V2</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  @keyframes sweep{from{transform:translate(-50%,-50%) rotate(0)}to{transform:translate(-50%,-50%) rotate(360deg)}}
+  @keyframes dpulse{0%,100%{opacity:.4}50%{opacity:.9}}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  :root{
+    --bg:#0A0D0C;--rail:rgba(7,11,9,.92);--chrome:rgba(8,12,10,.96);
+    --text:#fff;--text2:rgba(255,255,255,.6);--text3:rgba(255,255,255,.42);
+    --line:rgba(255,255,255,.08);--surface:rgba(255,255,255,.05);--surface-bd:rgba(255,255,255,.1);
+    --deck:rgba(12,18,15,.66);--card:rgba(255,255,255,.04);--card-bd:rgba(255,255,255,.08);
+    --input-bg:rgba(255,255,255,.04);--input-bd:rgba(255,255,255,.13);
+    --accent:#2DE08A;--accent-ink:#06241A;--accent-text:#3DF0A0;--accent-soft:rgba(45,224,138,.14);--accent-soft-bd:rgba(45,224,138,.32);
+    --danger:#FF8A92;--danger-bd:rgba(255,107,116,.32);--danger-solid:#E03E4E;--warn:#FFB341;--info:#8FC0FF;
+  }
+  body{background:var(--bg);color:var(--text);font-family:'Space Grotesk','PingFang SC','Microsoft YaHei',system-ui,sans-serif;font-size:13px}
+  .mono{font-family:'IBM Plex Mono',monospace}
+  a{color:var(--accent-text)}
+
+  /* ===== 骨架 ===== */
+  .app{min-height:100vh;display:flex}
+  .rail{width:64px;flex:none;background:var(--rail);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:4px;position:sticky;top:0;height:100vh}
+  .rail .logo{width:36px;height:36px;border-radius:11px;background:linear-gradient(145deg,#3DF0A0,#15A862);display:flex;align-items:center;justify-content:center;color:#062317;font-weight:700;font-size:12px;margin-bottom:6px}
+  .rail button{font-family:inherit;cursor:pointer;width:40px;height:38px;border-radius:11px;border:none;background:transparent;color:var(--text3);font-size:14px;display:flex;align-items:center;justify-content:center}
+  .rail button.sm{font-size:11px;font-weight:600}
+  .rail button.active{border:1px solid var(--accent-soft-bd);background:var(--accent-soft);color:var(--accent-text);font-weight:600}
+  .rail button.locked{opacity:.55;cursor:default}
+  .rail .div{width:30px;height:1px;background:var(--line);margin:4px 0}
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;min-height:100vh}
+
+  .topbar{height:52px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:var(--chrome);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+  .topbar .ttl{font-size:14px;font-weight:600}
+  .topbar .sub{font-size:11px;color:var(--text3);margin-left:10px}
+  .topbar .r{display:flex;align-items:center;gap:8px}
+  .pill{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;background:var(--surface);border:1px solid var(--surface-bd)}
+  .pill .k{font-size:10px;color:var(--text3)}
+  .pill .v{font-size:11.5px;font-weight:600}
+
+  .stage{flex:1;display:flex;min-height:0}
+  .journey{flex:1;display:none}
+  body[data-view="journey"] .stage{display:none}
+  body[data-view="journey"] .journey{display:block}
+
+  /* ===== viewport ===== */
+  .viewport{flex:1;position:relative;min-width:0;overflow:hidden;background:radial-gradient(135% 120% at 44% 26%,#13201A 0%,#0A0F0D 56%,#070A09 100%)}
+  .scene-host{position:absolute;inset:0}
+  .scene-host canvas{display:block}
+  .vp-fx{position:absolute;inset:0;pointer-events:none}
+  .vp-sweep{position:absolute;left:44%;top:42%;width:300px;height:300px;border-radius:50%;border:1px dashed rgba(45,224,138,.14);animation:sweep 40s linear infinite}
+  .vp-vig{position:absolute;inset:0;background:radial-gradient(120% 100% at 44% 42%,transparent 44%,rgba(0,0,0,.45) 100%)}
+
+  .glass{background:rgba(10,16,13,.62);backdrop-filter:blur(15px);-webkit-backdrop-filter:blur(15px);border:1px solid rgba(255,255,255,.1)}
+  .ov{position:absolute;display:flex}
+  .ov-tl{left:16px;top:14px;flex-direction:column;gap:8px;max-width:300px}
+  .sel-pill{display:flex;align-items:center;gap:8px;padding:7px 12px;border-radius:10px;border:1px solid rgba(45,224,138,.28)!important}
+  .sel-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}
+  .sel-text{font-size:12px;font-weight:500}
+  .hint{font-size:11px;color:var(--text3);padding-left:3px;line-height:1.5}
+  .jbox{padding:10px 12px;border-radius:10px;display:none}
+  .jbox.show{display:block}
+  .jbox .row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+  .jbox .nm{font-size:12px;font-weight:600}
+  .jbox .vl{font-size:12px;color:var(--accent-text)}
+  .jbox input[type=range]{width:100%;accent-color:var(--accent)}
+  .jbox input:disabled{opacity:.4}
+  .jbox .lim{display:flex;justify-content:space-between;font-size:9.5px;color:var(--text3);margin-top:3px}
+
+  .ov-tc{left:50%;top:16px;transform:translateX(-50%);align-items:center;gap:9px;padding:8px 10px 8px 14px;border-radius:12px;display:none}
+  .ov-tc.show{display:flex}
+  .ov-tc .lbl{font-size:12px;color:var(--text2)}
+  .ov-tc button{font-family:inherit;cursor:pointer;font-size:12px;border-radius:8px}
+  .b-go{padding:7px 14px;border:none;background:var(--accent);color:var(--accent-ink);font-weight:700}
+  .b-no{padding:7px 11px;border:1px solid var(--surface-bd);background:transparent;color:var(--text2);font-weight:500}
+
+  .ov-stop{left:16px;bottom:64px;align-items:center;gap:11px;padding:9px 12px 9px 13px;border-radius:13px;background:rgba(40,8,10,.72)!important;border:1px solid rgba(255,107,116,.45)!important;display:none}
+  .ov-stop.show{display:flex}
+  .ov-stop button{padding:9px 15px;border-radius:9px;border:none;background:var(--danger-solid);color:#fff;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit}
+  .ov-stop .t1{font-size:11px;color:#FFC9CD;font-weight:600}
+  .ov-stop .t2{font-size:10.5px;color:rgba(255,160,166,.72)}
+
+  .vp-danger{position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 0 2px rgba(224,62,78,.6),inset 0 0 60px rgba(224,62,78,.22);animation:dpulse 2.4s ease-in-out infinite;display:none}
+  .vp-danger.show{display:block}
+
+  /* viewport 内的原生 HUD（rebot-sim 用） */
+  .hud{position:absolute;font-size:11px}
+  .top-hud{display:none}
+  .pose-hud{right:16px;bottom:14px;display:flex;gap:16px;padding:9px 14px;border-radius:12px;background:rgba(10,16,13,.6);backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.1)}
+  .pose-hud span{font-size:9px;letter-spacing:.12em;color:rgba(150,235,195,.6);display:block;font-family:'IBM Plex Mono',monospace}
+  .pose-hud strong{font-size:12px;font-weight:500;font-family:'IBM Plex Mono',monospace}
+  .drag-hud{left:16px;bottom:16px;display:none;gap:8px;padding:8px 12px;border-radius:10px;background:rgba(10,16,13,.6);border:1px solid rgba(255,255,255,.1)}
+  .drag-hud.on{display:flex}
+  .legend-hud{display:none}
+  .status-pill{position:absolute;right:16px;top:14px;display:flex;align-items:center;gap:7px;padding:6px 11px;border-radius:9px;background:rgba(10,16,13,.6);border:1px solid rgba(255,255,255,.1);font-size:11.5px}
+  .status-dot{width:7px;height:7px;border-radius:50%;background:var(--warn)}
+  .drag-marker{position:absolute;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;border:2px solid var(--accent);background:rgba(45,224,138,.2);pointer-events:none;display:none;z-index:6}
+
+  .ov-zoom{right:14px;top:52px;gap:7px}
+  .ov-zoom button{width:30px;height:30px;border-radius:9px;border:1px solid var(--surface-bd);background:var(--surface);color:var(--text2);font-size:14px;cursor:pointer}
+
+  /* ===== 右侧控件区（沿用真 DOM，仅重绘） ===== */
+  .control-panel{width:380px;flex:none;overflow-y:auto;height:calc(100vh - 52px);background:var(--deck);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-left:1px solid var(--line);padding:14px 14px 28px}
+  .control-panel::-webkit-scrollbar{width:7px}.control-panel::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16);border-radius:4px}
+  .eyebrow{margin:0;font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--text3);font-family:'IBM Plex Mono',monospace}
+  .panel-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+  .panel-title h2{margin:2px 0 0;font-size:16px;font-weight:600}
+  .panel-actions{display:flex;gap:6px}
+  .icon-btn{width:32px;height:32px;border-radius:9px;border:1px solid var(--surface-bd);background:var(--surface);color:var(--text2);cursor:pointer;font-size:14px}
+  .install-status{font-size:10.5px;color:var(--text3);margin-bottom:12px}
+
+  .section{border-radius:14px;background:var(--card);border:1px solid var(--card-bd);padding:13px;margin-bottom:11px}
+  .section h2,.section h3{margin:0 0 10px;font-size:13px;font-weight:600}
+  .section-head{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:11px}
+  .section-head h3{margin:2px 0 0}
+  .mini-pill{font-size:10px;padding:3px 9px;border-radius:6px;background:var(--surface);border:1px solid var(--surface-bd);color:var(--text2);font-family:'IBM Plex Mono',monospace}
+
+  .field-row{display:flex;flex-direction:column;gap:5px;margin-bottom:9px}
+  .field-row>span{font-size:10.5px;color:var(--text3)}
+  .switch-row{display:flex;align-items:center;gap:9px;margin-bottom:9px;font-size:11.5px;color:var(--text2);cursor:pointer}
+  .switch-row input{width:16px;height:16px;accent-color:var(--accent)}
+  input[type=text],input[type=number],select,textarea{width:100%;padding:9px 11px;border:1px solid var(--input-bd);border-radius:10px;background:var(--input-bg);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:11.5px}
+  select{font-family:inherit}
+  textarea{resize:vertical;min-height:60px}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+
+  .button-grid{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:8px}
+  .button-grid button,.primary-btn,.secondary-btn{flex:1;min-width:96px;padding:9px 10px;border-radius:10px;border:1px solid var(--surface-bd);background:var(--surface);color:var(--text);font-size:12px;font-weight:500;cursor:pointer;font-family:inherit}
+  .button-grid button:hover,.primary-btn:hover,.secondary-btn:hover{border-color:var(--accent-soft-bd)}
+  .primary-btn{width:100%;border:none;background:var(--accent);color:var(--accent-ink);font-weight:700;margin-bottom:7px}
+  .secondary-btn{width:100%;margin-bottom:7px}
+  #ros-connect{background:var(--accent);color:var(--accent-ink);border:none;font-weight:700}
+  #ros-gravity-comp{background:rgba(45,224,138,.1);border-color:var(--accent-soft-bd);color:var(--accent-text)}
+  #ros-enable,#ros-disable{font-weight:600}
+  #ros-enable{color:var(--accent-text)}
+  #ros-disable{color:var(--danger)}
+
+  .ros-feedback,.gripper-readout{display:flex;justify-content:space-between;align-items:center;padding:8px 11px;border-radius:9px;background:var(--surface);margin:8px 0;font-size:11.5px}
+  .ros-feedback strong,.gripper-readout strong{font-family:'IBM Plex Mono',monospace;color:var(--accent-text)}
+  .ros-message,.teach-status{font-size:10.5px;color:var(--text3);line-height:1.55;margin:8px 0 0}
+  .ros-log{margin-top:10px;max-height:150px;overflow-y:auto;border-radius:9px;background:rgba(0,0,0,.25);border:1px solid var(--line);padding:8px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;line-height:1.6}
+  .ros-log:empty{display:none}
+  .ros-log-line{color:var(--text2)}
+  .ros-log-line.ok{color:var(--accent-text)}.ros-log-line.error{color:var(--danger)}.ros-log-line.info{color:var(--info)}
+
+  .diag-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:9px}
+  .diag-item{display:flex;justify-content:space-between;padding:7px 10px;border-radius:9px;background:var(--surface);font-size:10.5px}
+  .diag-item strong{font-family:'IBM Plex Mono',monospace}
+  .pose-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:9px}
+  .pose-grid label{display:flex;flex-direction:column;gap:4px;font-size:10px;color:var(--text3)}
+  .command-box{white-space:pre-wrap;word-break:break-all;font-family:'IBM Plex Mono',monospace;font-size:10px;line-height:1.6;color:var(--text2);background:rgba(0,0,0,.25);border:1px solid var(--line);border-radius:9px;padding:10px;max-height:160px;overflow:auto}
+  .teach-export{margin-top:8px;font-size:10px}
+  .metrics dl{margin:0;display:grid;gap:6px}
+  .metrics dl>div{display:flex;justify-content:space-between;font-size:11.5px}
+  .metrics dt{color:var(--text3)}.metrics dd{margin:0;color:var(--text)}
+
+  .joint-list{display:flex;flex-direction:column;gap:11px}
+  .joint-control{display:flex;flex-direction:column;gap:6px}
+  .joint-head{display:flex;justify-content:space-between;align-items:baseline;font-size:12px}
+  .joint-head strong{font-weight:600}
+  .joint-value{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--accent-text)}
+
+  /* 真机操作区 提示框 */
+  .liveband{border-radius:12px;border:1px solid var(--danger-bd);background:linear-gradient(rgba(255,107,116,.07),rgba(255,107,116,.02));padding:11px 13px;margin-bottom:11px}
+  .liveband .h{display:flex;align-items:center;gap:8px;font-family:'IBM Plex Mono',monospace;font-size:10.5px;letter-spacing:.04em;color:var(--danger);font-weight:700}
+  .liveband .h .i{width:17px;height:17px;border-radius:50%;background:rgba(255,107,116,.18);display:flex;align-items:center;justify-content:center;font-size:10px}
+  .liveband p{margin:7px 0 0;font-size:10.5px;color:rgba(255,160,166,.7);line-height:1.5}
+  .badge{font-size:9px;padding:2px 6px;border-radius:4px;font-weight:700;font-family:'IBM Plex Mono',monospace}
+  .badge.fall{background:rgba(255,107,116,.18);color:var(--danger)}
+  .badge.move{background:rgba(255,179,65,.2);color:var(--warn)}
+  .badge.power{background:rgba(45,224,138,.2);color:var(--accent-text)}
+  .glabel{display:flex;align-items:center;gap:7px;margin:9px 0 7px;font-size:10.5px;color:var(--text3)}
+
+  /* ===== 旅程页 ===== */
+  .journey{position:relative;overflow:hidden;background:var(--bg)}
+  .journey .glow{position:absolute;inset:0;background:radial-gradient(120% 100% at 30% 0%,#13201A 0%,var(--bg) 60%)}
+  .journey .wrap{position:relative;padding:40px 44px;height:100vh;overflow-y:auto}
+  .j-kick{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.16em;color:var(--accent-text);margin-bottom:12px}
+  .j-h{font-size:34px;font-weight:700;line-height:1.15;margin-bottom:14px}
+  .j-sub{font-size:15px;color:var(--text2);line-height:1.6;max-width:560px}
+  .j-lbl{display:flex;align-items:center;gap:10px;margin:30px 0 16px}
+  .j-lbl .m{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.12em;color:var(--text3)}
+  .j-lbl .ln{flex:1;height:1px;background:var(--line)}
+  .j-lbl .r{font-size:11px;color:var(--text3)}
+  .j-cards{display:flex;gap:11px;flex-wrap:wrap}
+  .j-card{flex:1;min-width:128px;border-radius:14px;background:var(--card);border:1px solid var(--card-bd);padding:14px;display:flex;flex-direction:column;gap:8px}
+  .j-card .top{display:flex;justify-content:space-between}
+  .j-card .no{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text3)}
+  .j-bdg{font-size:9px;padding:3px 7px;border-radius:5px;font-weight:600}
+  .j-card .nm{font-size:15px;font-weight:600}
+  .j-card .ds{font-size:11px;color:var(--text2);line-height:1.5;flex:1}
+  .j-card .ft{font-size:10.5px;color:var(--accent-text);font-weight:500}
+  .j-card.locked{opacity:.6}
+  .j-card.play{flex:1.2;min-width:148px;background:linear-gradient(160deg,rgba(45,224,138,.18),rgba(45,224,138,.05));border:1px solid var(--accent-soft-bd);cursor:pointer}
+  .j-card .cta{padding:8px 0;text-align:center;border-radius:9px;background:var(--accent);color:var(--accent-ink);font-size:12px;font-weight:700}
+
+  .loading-mask{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:var(--bg);z-index:60}
+  .loading-mask.hidden{display:none}   /* rebot-sim 加载完给遮罩加 .hidden 类，必须有这条它才会消失 */
+  .loader{width:30px;height:30px;border-radius:50%;border:3px solid rgba(45,224,138,.2);border-top-color:var(--accent);animation:spin 1s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .loading-mask p{font-size:12px;color:var(--text2)}
+</style>
+</head>
+<body data-view="cockpit">
+  <div class="app">
+    <!-- 左导航栏 -->
+    <nav class="rail">
+      <div class="logo">rB</div>
+      <button class="sm" id="nav-journey" title="总览">总览</button>
+      <div class="div"></div>
+      <button class="locked" title="装配 + 烧录（文档）">装</button>
+      <button class="locked" title="平台体检 + 连接">连</button>
+      <button class="active" id="nav-cockpit" title="玩">玩</button>
+      <button class="locked" title="采数据（待上线）">采</button>
+      <button class="locked" title="看数据（待上线）">看</button>
+      <button class="locked" title="训练（待上线）">训</button>
+      <button class="locked" title="部署（待上线）">部</button>
+    </nav>
+
+    <div class="main">
+      <header class="topbar">
+        <div><span class="ttl">玩 · 驾驶舱</span><span class="sub">下一步建议 · 采数据</span></div>
+        <div class="r">
+          <div class="pill"><span class="k mono">平台</span><span class="v" id="pf-v">…</span></div>
+          <div class="pill"><span class="k mono">源</span><span class="v" id="src-v">浏览器仿真</span></div>
+          <div class="pill"><span class="k mono">模式</span><span class="v" id="mode-pill" style="color:var(--accent-text)">仿真</span></div>
+        </div>
+      </header>
+
+      <div class="stage">
+        <!-- viewport -->
+        <section class="viewport" id="viewport">
+          <div id="scene-host" class="scene-host"></div>
+          <div class="vp-fx"><div class="vp-sweep"></div><div class="vp-vig"></div></div>
+          <div id="drag-marker" class="drag-marker" title="拖拽 TCP"></div>
+
+          <!-- 原生 HUD（rebot-sim 需要这些 id；按 V2 重绘/隐藏） -->
+          <header class="hud top-hud">
+            <div><p class="eyebrow">reBot Arm B601-DM</p><h1>仿真器</h1></div>
+          </header>
+          <div class="status-pill" id="load-status"><span class="status-dot"></span>加载中</div>
+          <div class="hud pose-hud">
+            <div><span>TCP</span><strong id="tcp-position">X -- / Y -- / Z --</strong></div>
+            <div><span>可达参考</span><strong id="reach-state">--</strong></div>
+          </div>
+          <div class="hud drag-hud" id="drag-hud"><span class="mono">拖拽目标</span><strong id="drag-status">未启用</strong></div>
+          <div class="hud legend-hud">
+            <span><i class="axis x"></i>+X 前</span><span><i class="axis y"></i>+Y 左</span><span><i class="axis z"></i>+Z 上</span>
+          </div>
+
+          <!-- V2 叠加层（extras 驱动） -->
+          <div class="ov ov-tl">
+            <div class="sel-pill glass"><span class="sel-dot"></span><span class="sel-text" id="x-sel">未选中关节</span></div>
+            <span class="hint">点 3D 里某段机械臂选中那根关节，拖滑块看半透明绿幽灵的目标姿态</span>
+            <div class="jbox glass" id="x-jbox">
+              <div class="row"><span class="nm" id="x-jname">—</span><span class="vl mono" id="x-jval">0.0°</span></div>
+              <input id="x-jrange" type="range" min="-180" max="180" step="0.5" value="0">
+              <div class="lim mono"><span id="x-jmin">-180°</span><span id="x-jmax">180°</span></div>
+            </div>
+          </div>
+
+          <div class="ov ov-tc glass" id="x-confirm">
+            <span class="lbl">幽灵姿态已就绪</span>
+            <button class="b-go" id="x-commit">确认 · 下发</button>
+            <button class="b-no" id="x-cancel">取消</button>
+          </div>
+
+          <div class="ov ov-zoom">
+            <button id="x-zin">＋</button><button id="x-zout">－</button><button id="reset-camera" title="重置视角">⟲</button>
+          </div>
+
+          <div class="ov ov-stop glass" id="x-stop">
+            <button id="x-stopbtn">■ 停止运动</button>
+            <div><div class="t1">断开网页控制 + 失能（应急软停）</div><div class="t2">⚠ 真急停请按硬件红钮 — 屏幕按钮非安全装置</div></div>
+          </div>
+
+          <div class="vp-danger" id="x-danger"></div>
+        </section>
+
+        <!-- ====== 右侧控件区（真 DOM，全部 id 保留） ====== -->
+        <aside class="control-panel">
+          <div class="panel-title">
+            <div><p class="eyebrow">控制台</p><h2>仿真控制台</h2></div>
+            <div class="panel-actions">
+              <button class="icon-btn" id="pwa-install" title="安装到桌面" hidden>+</button>
+            </div>
+          </div>
+          <div class="install-status" id="pwa-install-status" hidden></div>
+
+          <div class="section ros-section">
+            <div class="section-head">
+              <div><p class="eyebrow">ROS2 桥接</p><h3>真实机械臂连接</h3></div>
+              <span class="mini-pill" id="ros-status">离线</span>
+            </div>
+            <label class="field-row"><span>WebSocket</span><input id="ros-url" type="text" value="ws://192.168.60.130:9090" spellcheck="false"></label>
+            <div class="button-grid">
+              <button type="button" id="ros-connect">连接 ROS</button>
+              <button type="button" id="ros-disconnect">断开</button>
+            </div>
+            <label class="switch-row"><input type="checkbox" id="ros-mirror"><span>镜像真实关节状态到网页（只读）</span></label>
+            <label class="switch-row"><input type="checkbox" id="ros-control-enable"><span>允许网页向真实机械臂发控制（危险）</span></label>
+            <label class="field-row" style="margin-bottom:11px"><span>运行模式（真机直连必须选「真实机械臂」）</span><select id="ros-mode"><option value="fake">仿真驱动 (fake)</option><option value="real">真实机械臂 (real)</option></select></label>
+
+            <div class="liveband">
+              <div class="h"><span class="i">!</span>真机操作区 · LIVE HARDWARE</div>
+              <p id="x-livenote">勾选「允许发控制」才会真正下发。下列动作的后果已标注，执行前确认现场安全。</p>
+              <div class="glabel"><span class="badge fall">会坠落</span>切扭矩 / 顺应，臂会直接掉</div>
+              <div class="button-grid">
+                <button type="button" id="ros-disable">失能 ⚠掉</button>
+                <button type="button" id="ros-gravity-comp">🖐 重力补偿 ⚠掉</button>
+              </div>
+              <div class="glabel"><span class="badge move">会运动</span>臂会移动去目标，可能快</div>
+              <div class="button-grid">
+                <button type="button" id="ros-safe-home">安全回零</button>
+                <button type="button" id="ros-open-gripper">夹爪打开</button>
+                <button type="button" id="ros-close-gripper">夹爪闭合</button>
+              </div>
+              <div class="glabel"><span class="badge power">通电</span>电机上电变硬，会微动</div>
+              <div class="button-grid"><button type="button" id="ros-enable">使能电机</button></div>
+            </div>
+
+            <div class="ros-feedback"><span>反馈差值</span><strong id="ros-feedback-error">等待 /joint_states</strong></div>
+            <p class="ros-message" id="ros-message">先在 Ubuntu 启动 rosbridge，再连接。不连接即纯仿真，可随便玩。</p>
+          </div>
+
+          <div class="section teleop-section">
+            <div class="section-head">
+              <div><p class="eyebrow">物理遥操</p><h3>一键遥操 · 102→601</h3></div>
+              <span class="mini-pill" id="teleop-pill">未运行</span>
+            </div>
+            <label class="field-row"><span>主动臂端口 (102)</span><select id="teleop-leader"></select></label>
+            <label class="field-row"><span>跟随臂端口 (601)</span><select id="teleop-follower"></select></label>
+            <div class="button-grid">
+              <button type="button" id="teleop-refresh-ports">刷新端口</button>
+              <button type="button" id="teleop-toggle">🕹 一键遥操</button>
+            </div>
+            <p class="ros-message" id="teleop-message">选好两个串口点「一键遥操」：动 102，601 跟随。需装 lerobot 的机器；与 ROS2 互斥（抢同一串口，别同时连 ROS）。</p>
+            <div class="ros-log" id="teleop-log"></div>
+          </div>
+
+          <div class="section">
+            <h3>姿态预设</h3>
+            <div class="button-grid" id="preset-buttons"></div>
+          </div>
+
+          <div class="section">
+            <h3>关节角度</h3>
+            <div id="joint-controls" class="joint-list"></div>
+          </div>
+
+          <div class="section">
+            <h3>夹爪</h3>
+            <div class="gripper-readout"><span>开合宽度</span><strong id="gripper-width">0 毫米</strong></div>
+            <div class="button-grid">
+              <button type="button" id="open-gripper">打开夹爪</button>
+              <button type="button" id="close-gripper">关闭夹爪</button>
+            </div>
+          </div>
+
+          <div class="section">
+            <h3>空间图层</h3>
+            <label class="switch-row"><input type="checkbox" id="toggle-envelope" checked><span>显示估算可达包络</span></label>
+            <label class="switch-row"><input type="checkbox" id="toggle-ghost"><span>显示目标残影（旧版幽灵，默认关）</span></label>
+          </div>
+
+          <div class="section">
+            <h3>演示</h3>
+            <button class="primary-btn" id="play-path">播放取放路径</button>
+            <button class="secondary-btn" id="plan-trajectory">规划到当前姿态</button>
+            <button class="secondary-btn" id="toggle-drag">启用 TCP 拖拽</button>
+            <button class="secondary-btn" id="stop-path">停止</button>
+          </div>
+
+          <!-- 高级（折叠展开） -->
+          <details class="section">
+            <summary style="cursor:pointer;font-weight:600;font-size:13px;list-style:none">高级 · 诊断 / 轨迹 / 示教 / 启动助手</summary>
+            <div style="margin-top:12px">
+              <div class="section ros-tools-section">
+                <div class="section-head"><div><p class="eyebrow">诊断</p><h3>ROS 一键检测</h3></div><span class="mini-pill" id="ros-mode-pill">仿真</span></div>
+                <p class="ros-message" style="margin:0 0 9px">运行模式开关已移到上面「ROS2 桥接」区。</p>
+                <div class="diag-grid">
+                  <div class="diag-item"><span>rosbridge</span><strong id="diag-bridge">--</strong></div>
+                  <div class="diag-item"><span>/joint_states</span><strong id="diag-joint-states">--</strong></div>
+                  <div class="diag-item"><span>/arm_status</span><strong id="diag-arm-status">--</strong></div>
+                  <div class="diag-item"><span>/gripper/state</span><strong id="diag-gripper">--</strong></div>
+                </div>
+                <div class="button-grid"><button type="button" id="ros-run-diagnostics">检测 ROS</button><button type="button" id="ros-clear-log">清空日志</button></div>
+              </div>
+
+              <div class="section safety-section">
+                <h3>安全限制</h3>
+                <label class="field-row"><span>关节速度上限 rad/s</span><input id="ros-vlim" type="number" min="0.05" max="3" step="0.05" value="1.2"></label>
+                <label class="field-row"><span>轨迹总时长 s</span><input id="ros-trajectory-duration" type="number" min="1" max="30" step="0.5" value="6"></label>
+                <label class="switch-row"><input type="checkbox" id="ros-require-confirm" checked><span>真机模式下执行前二次确认</span></label>
+              </div>
+
+              <div class="section action-section">
+                <h3>轨迹与 Pose 下发</h3>
+                <div class="button-grid"><button type="button" id="ros-send-teach-trajectory">下发示教轨迹</button><button type="button" id="ros-send-current-trajectory">下发当前姿态</button></div>
+                <div class="pose-grid">
+                  <label>X m<input id="ros-pose-x" type="number" step="0.005" value="0.30"></label>
+                  <label>Y m<input id="ros-pose-y" type="number" step="0.005" value="0.00"></label>
+                  <label>Z m<input id="ros-pose-z" type="number" step="0.005" value="0.30"></label>
+                  <label>时长 s<input id="ros-pose-duration" type="number" step="0.2" value="2.0"></label>
+                </div>
+                <div class="button-grid"><button type="button" id="ros-check-ik">IK 检查</button><button type="button" id="ros-send-pose">发送 Pose</button></div>
+              </div>
+
+              <div class="section startup-section">
+                <h3>Ubuntu 启动助手</h3>
+                <pre class="command-box" id="ros-startup-commands">source /opt/ros/jazzy/setup.bash
+cd ~/reBotArmController_ROS2-main
+colcon build --symlink-install
+source install/setup.bash
+ros2 launch rebotarm_bringup fake_bringup.launch.py
+
+# 另一个终端
+source /opt/ros/jazzy/setup.bash
+source ~/reBotArmController_ROS2-main/install/setup.bash
+ros2 launch rosbridge_server rosbridge_websocket_launch.xml port:=9090 address:=0.0.0.0</pre>
+              </div>
+
+              <div class="section teach-section">
+                <h3>TCP 示教</h3>
+                <div class="button-grid teach-buttons">
+                  <button type="button" id="teach-record">开始录制</button>
+                  <button type="button" id="teach-replay">回放</button>
+                  <button type="button" id="teach-export">导出 ROS waypoint</button>
+                  <button type="button" id="teach-clear">清空</button>
+                </div>
+                <p class="teach-status" id="teach-status">未录制</p>
+                <textarea id="teach-export-text" class="teach-export" readonly placeholder="导出的 waypoints 会显示在这里"></textarea>
+              </div>
+
+              <div class="section log-section">
+                <h3>ROS 实时日志</h3>
+                <div class="ros-log" id="ros-log"></div>
+              </div>
+
+              <div class="section metrics">
+                <h3>机械臂信息</h3>
+                <dl>
+                  <div><dt>模型</dt><dd>ROS2 URDF + STL</dd></div>
+                  <div><dt>自由度</dt><dd>6 DOF + 夹爪</dd></div>
+                  <div><dt>坐标</dt><dd>X 前 / Y 左 / Z 上</dd></div>
+                </dl>
+              </div>
+            </div>
+          </details>
+        </aside>
+      </div>
+
+      <!-- 旅程页 -->
+      <section class="journey">
+        <div class="glow"></div>
+        <div class="wrap">
+          <div class="j-kick">REBOT ARM B601-DM</div>
+          <div class="j-h">从开箱到部署，<br>一步步把机械臂玩明白。</div>
+          <div class="j-sub">没有机械臂？直接从「玩」开始 —— 浏览器里就能拖动这台臂，零配置。准备好了再往后走。</div>
+          <div class="j-lbl"><span class="m">学习路径</span><span class="ln"></span><span class="r">建议顺序 · 可随意跳</span></div>
+          <div class="j-cards">
+            <div class="j-card"><div class="top"><span class="no">01</span><span class="j-bdg" style="background:rgba(90,169,255,.14);color:var(--info)">文档</span></div><div class="nm">装</div><div class="ds">装配 + 烧录电机 ID</div><div class="ft">查看指南 ›</div></div>
+            <div class="j-card"><div class="top"><span class="no">02</span><span class="j-bdg" style="background:var(--surface);color:var(--text2)">可连接</span></div><div class="nm">连</div><div class="ds">平台体检 · 连接 ROS</div><div class="ft">去连接 ›</div></div>
+            <div class="j-card play" id="j-play"><div class="top"><span class="no" style="color:var(--accent-text)">03</span><span class="j-bdg" style="background:var(--accent);color:var(--accent-ink)">现在可玩</span></div><div class="nm" style="font-size:16px">玩</div><div class="ds" style="color:var(--text2)">浏览器里拖着玩，无需硬件</div><div class="cta">进入驾驶舱 →</div></div>
+            <div class="j-card locked"><div class="top"><span class="no">04</span><span class="j-bdg" style="background:var(--surface);color:var(--text3)">锁定</span></div><div class="nm" style="color:var(--text2)">采数据</div><div class="ds" style="color:var(--text3)">遥操录制 episode</div><div class="ft" style="color:var(--text3)">今天: <span class="mono" style="color:var(--accent-text)">lerobot record</span></div></div>
+            <div class="j-card locked"><div class="top"><span class="no">05</span><span class="j-bdg" style="background:var(--surface);color:var(--text3)">锁定</span></div><div class="nm" style="color:var(--text2)">看数据</div><div class="ds" style="color:var(--text3)">3D 回放数据集</div><div class="ft" style="color:var(--text3)">LeRobot visualizer</div></div>
+            <div class="j-card locked"><div class="top"><span class="no">06</span><span class="j-bdg" style="background:var(--surface);color:var(--text3)">锁定</span></div><div class="nm" style="color:var(--text2)">训练</div><div class="ds" style="color:var(--text3)">跑策略 · 看 loss</div><div class="ft" style="color:var(--text3)">参考 <span class="mono" style="color:var(--accent-text)">50K / 0.063</span></div></div>
+            <div class="j-card locked"><div class="top"><span class="no">07</span><span class="j-bdg" style="background:var(--surface);color:var(--text3)">锁定</span></div><div class="nm" style="color:var(--text2)">部署</div><div class="ds" style="color:var(--text3)">真臂上跑策略</div><div class="ft" style="color:rgba(255,140,140,.6)">需真机 · 谨慎</div></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div class="loading-mask" id="loading-mask">
+    <div class="loader"></div>
+    <p id="loading-text">正在加载 reBot 机械臂模型...</p>
+  </div>
+
+  <!-- 真脚本（与 index.html 同，去掉 pwa.js 以免缓存原型） -->
+  <script src="/lib/three-r128.min.js"></script>
+  <script src="/lib/STLLoader-umd.js"></script>
+  <script src="/lib/URDFLoader.js"></script>
+  <script src="/js/ros/rebot-ros-client.js?v=20260520-cn-status"></script>
+  <script src="/js/rebot-sim.js?v=20260630-v2getter"></script>
+  <script src="/js/ros/rebot-ros-ui.js?v=20260520-cn-status"></script>
+  <script src="/js/platform-notice.js?v=20260629-fh"></script>
+  <script src="/js/teleop-launcher.js?v=20260629-fh"></script>
+
+  <!-- ===== V2 叠加层：点关节选中 + 幽灵目标预览 + 顶栏 pills（用 reBotSim 只读 getter） ===== -->
+  <script>
+  (function () {
+    'use strict';
+    var DEG = Math.PI / 180, RAD = 180 / Math.PI;
+    var $ = function (id) { return document.getElementById(id); };
+    var jointDefs = null, camera = null, renderer = null, robot = null, ghost = null;
+    var selected = null, pending = false, highlightSaved = [];
+    var target = {};
+    var highlightMat = null;
+
+    function ready() {
+      if (!(window.reBotSim && reBotSim.getRobot && reBotSim.getCamera && reBotSim.getRenderer)) return false;
+      var r = reBotSim.getRobot();
+      if (!r || !reBotSim.getCamera() || !reBotSim.getRenderer()) return false;
+      var hasMesh = false; r.traverse(function (c) { if (c.isMesh) hasMesh = true; });
+      var mask = document.getElementById('loading-mask');
+      var loaded = mask && mask.classList.contains('hidden');  // finishRobotLoad 完成（含夹爪尝试）再克隆幽灵
+      return hasMesh && loaded;
+    }
+    var iv = setInterval(function () { if (ready()) { clearInterval(iv); boot(); } }, 250);
+
+    function boot() {
+      jointDefs = reBotSim.getJointDefs().filter(function (j) { return j.name !== 'gripper'; });
+      camera = reBotSim.getCamera();
+      renderer = reBotSim.getRenderer();
+      robot = reBotSim.getRobot();
+      highlightMat = new THREE.MeshStandardMaterial({ color: 0x2DE08A, emissive: 0x0c5a36, emissiveIntensity: 0.95, roughness: 0.4, metalness: 0.1, side: THREE.DoubleSide });
+      ghost = robot.clone(true);
+      ghost.traverse(function (c) { if (c.isMesh) c.material = new THREE.MeshStandardMaterial({ color: 0x2DE08A, roughness: 0.3, metalness: 0.05, transparent: true, opacity: 0.22, depthWrite: false, side: THREE.DoubleSide }); });
+      ghost.visible = false;
+      robot.parent.add(ghost);   // 加进 robotFrame，继承 -90° 朝向
+      syncTargetToCurrent();
+      bind();
+      tick();
+      pollPlatform();
+      watchMode();
+    }
+
+    function syncTargetToCurrent() { var a = reBotSim.getAngles(); jointDefs.forEach(function (j) { target[j.name] = a[j.name] || 0; }); }
+
+    // 点选
+    function bind() {
+      var dom = renderer.domElement, dx = 0, dy = 0, dt = 0;
+      dom.addEventListener('pointerdown', function (e) { dx = e.clientX; dy = e.clientY; dt = performance.now(); });
+      dom.addEventListener('pointerup', function (e) {
+        if (reBotSim.getDragMode && reBotSim.getDragMode()) return;   // TCP 拖拽模式下不抢点选
+        if (Math.hypot(e.clientX - dx, e.clientY - dy) < 5 && performance.now() - dt < 350) pick(e);
+      });
+      $('x-jrange').addEventListener('input', onSlider);
+      $('x-commit').addEventListener('click', commit);
+      $('x-cancel').addEventListener('click', cancel);
+      // rebot-sim 的 createOrbit 没有 zoom()，改派发合成 wheel（deltaY<0 拉近 / >0 拉远），不改 rebot-sim
+      $('x-zin').addEventListener('click', function () { wheelZoom(-1); });
+      $('x-zout').addEventListener('click', function () { wheelZoom(1); });
+      $('x-stopbtn').addEventListener('click', function () { var sp = $('stop-path'); if (sp) sp.click(); var d = $('ros-disable'); if (d) d.click(); });
+      $('nav-journey').addEventListener('click', function () { document.body.setAttribute('data-view', 'journey'); });
+      $('nav-cockpit').addEventListener('click', function () { document.body.setAttribute('data-view', 'cockpit'); });
+      $('j-play').addEventListener('click', function () { document.body.setAttribute('data-view', 'cockpit'); });
+    }
+
+    function pick(e) {
+      robot = reBotSim.getRobot(); if (!robot) return;
+      var rect = renderer.domElement.getBoundingClientRect();
+      var ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+      var ray = new THREE.Raycaster(); ray.setFromCamera(ndc, camera);
+      var hits = ray.intersectObject(robot, true);
+      if (!hits.length) return;
+      var node = hits[0].object;
+      while (node && !(node.isURDFJoint && node.jointType !== 'fixed')) node = node.parent;
+      if (node) selectJoint(node.urdfName || node.name);
+    }
+
+    function selectJoint(name) {
+      if (!jointDefs.some(function (j) { return j.name === name; })) return;
+      selected = name;
+      restoreHi();
+      segMeshes(robot.joints[name]).forEach(function (m) { highlightSaved.push({ m: m, mat: m.material }); m.material = highlightMat; });
+      var def = jointDefs.find(function (j) { return j.name === name; });
+      $('x-sel').textContent = '已选关节 · ' + def.label;
+      $('x-jbox').classList.add('show');
+      $('x-jname').textContent = def.label;
+      $('x-jmin').textContent = Math.round(def.min * RAD) + '°';
+      $('x-jmax').textContent = Math.round(def.max * RAD) + '°';
+      var r = $('x-jrange'); r.min = (def.min * RAD).toFixed(1); r.max = (def.max * RAD).toFixed(1);
+      r.value = (target[name] * RAD).toFixed(1); $('x-jval').textContent = (target[name] * RAD).toFixed(1) + '°';
+    }
+    function restoreHi() { highlightSaved.forEach(function (s) { s.m.material = s.mat; }); highlightSaved = []; }
+    function segMeshes(joint) {
+      var out = [];
+      (function walk(n) { (n.children || []).forEach(function (c) { if (c.isURDFJoint) return; if (c.isMesh) out.push(c); walk(c); }); })(joint);
+      return out;
+    }
+
+    function onSlider() {
+      if (!selected) return;
+      var deg = parseFloat($('x-jrange').value);
+      target[selected] = deg * DEG; pending = true;
+      $('x-jval').textContent = deg.toFixed(1) + '°';
+    }
+    function commit() {
+      // 下发：驱动真 sim（若已勾选「允许发控制」，经现有 ros 链路同时发真机）
+      reBotSim.setAngles(target, { source: 'user' });
+      pending = false; syncTargetToCurrent();
+    }
+    function cancel() { pending = false; syncTargetToCurrent(); if (selected) { $('x-jrange').value = (target[selected] * RAD).toFixed(1); $('x-jval').textContent = (target[selected] * RAD).toFixed(1) + '°'; } }
+    function wheelZoom(dir) { try { renderer.domElement.dispatchEvent(new WheelEvent('wheel', { deltaY: dir * 240, bubbles: true, cancelable: true })); } catch (e) {} }
+
+    function tick() {
+      requestAnimationFrame(tick);
+      robot = reBotSim.getRobot(); if (!robot || !ghost) return;
+      if (!pending) syncTargetToCurrent();
+      jointDefs.forEach(function (j) { var jt = ghost.joints[j.name]; if (jt && jt.setJointValue) jt.setJointValue(target[j.name]); });
+      ghost.visible = pending;
+      $('x-confirm').classList.toggle('show', pending);
+    }
+
+    // 顶栏 pills：源 / 模式 跟随真实开关
+    // 顶栏 源/模式 跟随真实闸门：真正打真机 = 已连 + #ros-mode=real + 勾了允许发控制
+    function watchMode() {
+      var ctl = $('ros-control-enable'), mir = $('ros-mirror'), st = $('ros-status'), modeSel = $('ros-mode');
+      function set(el, t, c) { el.textContent = t; el.style.color = c; }
+      function upd() {
+        var connected = st && /在线|已连接|connected|open/i.test(st.textContent || '');
+        var real = modeSel && modeSel.value === 'real';
+        var allow = ctl && ctl.checked, mirror = mir && mir.checked;
+        var liveOn = connected && real && allow;           // 唯一会真打硬件的组合
+        var srcEl = $('src-v'), mEl = $('mode-pill');
+        if (!connected) { srcEl.textContent = '浏览器仿真'; set(mEl, '仿真', 'var(--accent-text)'); }
+        else if (!real) { srcEl.textContent = '仿真驱动 fake'; set(mEl, '仿真驱动', 'var(--info)'); }
+        else if (liveOn) { srcEl.textContent = '真机 601'; set(mEl, '真机控制', 'var(--danger)'); }
+        else { srcEl.textContent = '真机·未授权'; set(mEl, '真机·待授权', 'var(--warn)'); }
+        if (connected && mirror) srcEl.textContent += ' · 镜像';
+        $('x-danger').classList.toggle('show', !!liveOn);
+        $('x-stop').classList.toggle('show', !!liveOn);
+        $('x-commit').textContent = liveOn ? '确认 · 下发到真机' : (connected && !real ? '确认 · 发给 fake 驱动' : '确认 · 仿真预览');
+      }
+      if (ctl) ctl.addEventListener('change', upd);
+      if (mir) mir.addEventListener('change', upd);
+      if (modeSel) modeSel.addEventListener('change', upd);
+      setInterval(upd, 600); upd();
+    }
+
+    function pollPlatform() {
+      fetch('/api/platform').then(function (r) { return r.json(); }).then(function (info) {
+        var host = info && info.host || 'unknown';
+        $('pf-v').textContent = { windows: 'Windows', wsl: 'WSL', linux: 'Linux', mac: 'macOS' }[host] || (info && info.label) || host;
+      }).catch(function () { $('pf-v').textContent = '未知'; });
+    }
+  })();
+  </script>
+</body>
+</html>

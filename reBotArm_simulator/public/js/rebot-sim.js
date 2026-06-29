@@ -1565,6 +1565,17 @@
     }
   };
 
+  // [Added by fanhao375 2026-06-30] 只读 getter，供 cockpit.html 的点选/幽灵叠加层取场景对象。
+  // 纯新增、不改任何现有行为；index.html 不使用，照常工作。彻底回退：git checkout 本文件。
+  Object.assign(window.reBotSim, {
+    getScene: function () { return scene; },
+    getCamera: function () { return camera; },
+    getRenderer: function () { return renderer; },
+    getControls: function () { return controls; },
+    getRobot: function () { return robot; },
+    getDragMode: function () { return dragMode; }
+  });
+
   function createOrbit(cam, dom, initialTarget) {
     let rotating = false;
     let panning = false;
