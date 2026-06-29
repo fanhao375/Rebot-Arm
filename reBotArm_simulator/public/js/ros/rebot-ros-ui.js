@@ -22,6 +22,7 @@
     enable: document.getElementById('ros-enable'),
     disable: document.getElementById('ros-disable'),
     safeHome: document.getElementById('ros-safe-home'),
+    gravityComp: document.getElementById('ros-gravity-comp'),
     rosOpenGripper: document.getElementById('ros-open-gripper'),
     closeGripper: document.getElementById('ros-close-gripper'),
     openGripper: document.getElementById('open-gripper'),
@@ -60,6 +61,7 @@
   const COMMAND_INTERVAL_MS = 45;
   const MIRROR_HOLD_MS = 1800;
   let realArmed = false;
+  let gravityOn = false;
   let latestJointPositions = null;
   let latestGripperPosition = null;
   let listedTopics = new Set();
@@ -94,10 +96,23 @@
     guardedCall(() => client.disable(), '已请求失能', true);
   });
   els.safeHome.addEventListener('click', () => guardedCall(() => client.safeHome(), '已请求安全回零'));
-  els.rosOpenGripper.addEventListener('click', () => sendGripper(OPEN_GRIPPER_M, { requireControl: isRealMode() }));
-  els.closeGripper.addEventListener('click', () => sendGripper(CLOSE_GRIPPER_M, { requireControl: isRealMode() }));
-  els.openGripper.addEventListener('click', () => maybeSendGripper(OPEN_GRIPPER_M));
-  els.simCloseGripper.addEventListener('click', () => maybeSendGripper(CLOSE_GRIPPER_M));
+  if (els.gravityComp) {
+    // [Added by fanhao375 2026-06-29] 一键重力补偿：发 start/stop，按钮真实态由 arm_status 的 GRAVITY_COMP 驱动
+    els.gravityComp.addEventListener('click', () => {
+      if (!gravityOn) {
+        gravityOn = true; updateGravityUi(); // 乐观置态，arm_status 回流为最终真值；失败则回滚
+        guardedCall(() => client.gravityCompStart(), '已请求开启重力补偿（拖着手感，可徒手推动机械臂）')
+          .then((r) => { if (r === null) { gravityOn = false; updateGravityUi(); } });
+      } else {
+        gravityOn = false; updateGravityUi();
+        guardedCall(() => client.gravityCompStop(), '已请求停止重力补偿', true);
+      }
+    });
+  }
+  els.rosOpenGripper.addEventListener('click', () => gripperAction(true, true));
+  els.closeGripper.addEventListener('click', () => gripperAction(false, true));
+  els.openGripper.addEventListener('click', () => gripperAction(true, false));
+  els.simCloseGripper.addEventListener('click', () => gripperAction(false, false));
   els.runDiagnostics.addEventListener('click', runDiagnostics);
   els.clearLog.addEventListener('click', () => { els.log.innerHTML = ''; });
   els.sendTeachTrajectory.addEventListener('click', sendTeachTrajectory);
@@ -133,6 +148,7 @@
 
   setStatus('closed', 'ROS 未连接');
   updateModeUi();
+  updateGravityUi();
   updateDiagnostics();
   window.setInterval(updateDiagnostics, 1000);
 
@@ -194,6 +210,8 @@
     const enabled = msg.enabled ? '已使能' : '已失能';
     const mode = msg.mode || 'unknown';
     const machine = msg.state_machine || 'unknown';
+    const gravity = machine === 'GRAVITY_COMP';
+    if (gravity !== gravityOn) { gravityOn = gravity; updateGravityUi(); }
     const errors = Array.isArray(msg.error_codes) && msg.error_codes.length ? `，错误 ${msg.error_codes.join(', ')}` : '';
     setMessage(`${enabled}，模式 ${mode}，状态 ${machine}${errors}`);
     updateDiagnostics();
@@ -555,7 +573,7 @@
     mirrorHoldUntil.set('gripper', performance.now() + 1200);
     const feedback = typeof latestGripperPosition === 'number' ? `，当前 ROS反馈 ${Math.round(latestGripperPosition * 1000)} 毫米` : '';
     setMessage(`夹爪指令已发布：${Math.round(position * 1000)} 毫米${feedback}`);
-    writeLog(`夹爪指令 ${Math.round(position * 1000)} 毫米 -> /${NS}/gripper/cmd`, 'ok');
+    writeLog(`夹爪指令 ${Math.round(position * 1000)} 毫米 -> /${NS}/gripper/cmd/pos_vel`, 'ok');
     window.setTimeout(() => {
       if (client.connected) client.publishGripperCommand(position);
     }, 120);
@@ -564,6 +582,21 @@
   function syncSimGripper(position) {
     if (!window.reBotSim || typeof window.reBotSim.setGripperWidth !== 'function') return;
     window.reBotSim.setGripperWidth(position, { source: 'ui', animate: true });
+  }
+
+  // [Added by fanhao375 2026-06-29] 夹爪开/合走 controller 专用服务(默认开/合位)，规避 米 vs rad 单位错。
+  // 仿真视觉照常更新；真机仅在连接 + (真机模式下控制锁打开) 时下发。
+  function gripperAction(open, requireControl) {
+    syncSimGripper(open ? OPEN_GRIPPER_M : CLOSE_GRIPPER_M);
+    if (!client.connected) { setMessage('夹爪已更新到网页仿真；ROS 未连接。'); return; }
+    if (requireControl && isRealMode() && !controlAllowed(true)) return;
+    if (!requireControl && isRealMode() && !controlAllowed(false)) {
+      setMessage('真机模式下夹爪需要先打开控制锁。');
+      return;
+    }
+    const call = open ? () => client.openGripper(0) : () => client.closeGripper(0);
+    simTargetAngles.set('gripper', open ? OPEN_GRIPPER_M : CLOSE_GRIPPER_M);
+    guardedCall(call, open ? '已请求打开夹爪（默认开位）' : '已请求闭合夹爪（默认闭位）', true);
   }
 
   function isRealMode() {
@@ -575,6 +608,13 @@
     els.modePill.textContent = isRealMode() ? (realArmed ? '真机已解锁' : '真机锁定') : '仿真';
     els.modePill.className = 'mini-pill';
     els.modePill.classList.add(isRealMode() ? (realArmed ? 'error' : 'warn') : 'online');
+  }
+
+  function updateGravityUi() {
+    if (!els.gravityComp) return;
+    els.gravityComp.textContent = gravityOn ? '⏹ 停止重力补偿' : '🖐 一键重力补偿（拖着手感）';
+    els.gravityComp.style.background = gravityOn ? '#3a1e1e' : '';
+    els.gravityComp.style.color = gravityOn ? '#ffb4b4' : '';
   }
 
   function getVlim() {

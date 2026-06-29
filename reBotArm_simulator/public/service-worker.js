@@ -1,4 +1,5 @@
-const CACHE_NAME = 'rebot-arm-pwa-v2';
+// [Modified by fanhao375 2026-06-30] bump ->v8（界面还原上游原始深色，仅保留功能改动）
+const CACHE_NAME = 'rebot-arm-pwa-v8';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -9,6 +10,8 @@ const APP_SHELL = [
   '/js/rebot-sim.js?v=20260520-cn-status',
   '/js/ros/rebot-ros-client.js?v=20260520-cn-status',
   '/js/ros/rebot-ros-ui.js?v=20260520-cn-status',
+  '/js/platform-notice.js?v=20260629-fh',
+  '/js/teleop-launcher.js?v=20260629-fh',
   '/lib/three-r128.min.js',
   '/lib/STLLoader-umd.js',
   '/lib/URDFLoader.js'

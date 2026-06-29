@@ -103,10 +103,35 @@
       return this.callService(`/${this.namespace}/safe_home`, 'std_srvs/srv/Trigger', {});
     }
 
+    // [Added by fanhao375 2026-06-29] controller 内部重力补偿（拖着手感）：start/stop 均为 std_srvs/Trigger
+    gravityCompStart() {
+      return this.callService(`/${this.namespace}/gravity_compensation/start`, 'std_srvs/srv/Trigger', {});
+    }
+
+    gravityCompStop() {
+      return this.callService(`/${this.namespace}/gravity_compensation/stop`, 'std_srvs/srv/Trigger', {});
+    }
+
     setGripper(position, maxEffort) {
       return this.callService(`/${this.namespace}/gripper/set`, 'rebotarm_msgs/srv/SetGripper', {
         position,
         max_effort: maxEffort || 0
+      });
+    }
+
+    // [Added by fanhao375 2026-06-29] 夹爪开/合走专用服务：position 0.0 = controller 默认开/合位
+    // (单位是夹爪电机 rad，由 controller 内部决定，无需前端换算开口距离)。
+    openGripper(position, timeout) {
+      return this.callService(`/${this.namespace}/gripper/open`, 'rebotarm_msgs/srv/GripperCommand', {
+        position: position || 0,
+        timeout: timeout || 3
+      });
+    }
+
+    closeGripper(position, timeout) {
+      return this.callService(`/${this.namespace}/gripper/close`, 'rebotarm_msgs/srv/GripperCommand', {
+        position: position || 0,
+        timeout: timeout || 3
       });
     }
 
@@ -156,46 +181,28 @@
       return this._lastMessageAt.get(topic) || 0;
     }
 
+    // [Modified by fanhao375 2026-06-29] 命令路径返工：上游 sim 发废弃的 JointMotorCmd→/cmd；
+    // 本仓 controller 已改用 JointPosVelCmd→/cmd/pos_vel（{pos, vlim, stamp}，RELIABLE depth10）。
     publishJointCommand(jointName, position, options) {
-      const topic = `/${this.namespace}/joints/${jointName}/cmd`;
-      const type = 'rebotarm_msgs/msg/JointMotorCmd';
+      const topic = `/${this.namespace}/joints/${jointName}/cmd/pos_vel`;
+      const type = 'rebotarm_msgs/msg/JointPosVelCmd';
       this.advertise(topic, type);
       this.publish(topic, {
-        mode: options && typeof options.mode === 'number' ? options.mode : 1,
-        use_pos: true,
-        use_vel: false,
-        use_kp: false,
-        use_kd: false,
-        use_tau: false,
-        use_vlim: Boolean(options && typeof options.vlim === 'number'),
         pos: position,
-        vel: 0,
-        kp: 0,
-        kd: 0,
-        tau: 0,
         vlim: options && typeof options.vlim === 'number' ? options.vlim : 0,
         stamp: { sec: 0, nanosec: 0 }
       });
     }
 
-    publishGripperCommand(position) {
-      const topic = `/${this.namespace}/gripper/cmd`;
-      const type = 'rebotarm_msgs/msg/JointMotorCmd';
+    // ⚠️ [fanhao375] controller 夹爪 pos 单位是电机角度 rad，而网页 position 是米 —— 连续流式控真机夹爪
+    // 需先做 米→rad 标定；离散开/合请用上面的 openGripper()/closeGripper() 服务，别用这个 raw topic。
+    publishGripperCommand(position, options) {
+      const topic = `/${this.namespace}/gripper/cmd/pos_vel`;
+      const type = 'rebotarm_msgs/msg/JointPosVelCmd';
       this.advertise(topic, type);
       this.publish(topic, {
-        mode: 1,
-        use_pos: true,
-        use_vel: false,
-        use_kp: false,
-        use_kd: false,
-        use_tau: false,
-        use_vlim: false,
         pos: position,
-        vel: 0,
-        kp: 0,
-        kd: 0,
-        tau: 0,
-        vlim: 0,
+        vlim: options && typeof options.vlim === 'number' ? options.vlim : 0,
         stamp: { sec: 0, nanosec: 0 }
       });
     }

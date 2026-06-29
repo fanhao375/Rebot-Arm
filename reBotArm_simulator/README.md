@@ -1,5 +1,7 @@
 # reBot Arm B601-DM Simulator
 
+> 🚀 本目录二次开发自 [Yang-Ci/Rebot-Arm](https://github.com/Yang-Ci/Rebot-Arm)。改造愿景、已做改动、路线图见 **[驾驶舱-愿景与改动.md](./驾驶舱-愿景与改动.md)**。
+
 Standalone web simulator for the ROS2 reBot Arm B601-DM model.
 
 The UI models the arm as 6 URDF joints plus the configured gripper actuator

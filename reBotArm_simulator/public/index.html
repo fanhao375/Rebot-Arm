@@ -99,11 +99,38 @@
           <button type="button" id="ros-open-gripper">夹爪打开</button>
           <button type="button" id="ros-close-gripper">夹爪闭合</button>
         </div>
+        <div class="button-grid">
+          <button type="button" id="ros-gravity-comp">🖐 一键重力补偿（拖着手感）</button>
+        </div>
         <div class="ros-feedback">
           <span>反馈差值</span>
           <strong id="ros-feedback-error">等待 /joint_states</strong>
         </div>
         <p class="ros-message" id="ros-message">先在 Ubuntu 虚拟机启动 rosbridge，再连接 ws://192.168.60.128:9090。</p>
+      </div>
+
+      <div class="section teleop-section">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">物理遥操</p>
+            <h3>一键遥操 · 102 主动 → 601 跟随</h3>
+          </div>
+          <span class="mini-pill" id="teleop-pill">未运行</span>
+        </div>
+        <label class="field-row">
+          <span>主动臂端口 (102)</span>
+          <select id="teleop-leader"></select>
+        </label>
+        <label class="field-row">
+          <span>跟随臂端口 (601)</span>
+          <select id="teleop-follower"></select>
+        </label>
+        <div class="button-grid">
+          <button type="button" id="teleop-refresh-ports">刷新端口</button>
+          <button type="button" id="teleop-toggle">🕹 一键遥操</button>
+        </div>
+        <p class="ros-message" id="teleop-message">选好两个串口，点「一键遥操」：动 102 主动臂，601 跟随。需装了 lerobot 环境的机器才能真启动；与 ROS2 控制互斥（抢同一串口，别同时连 ROS）。</p>
+        <div class="ros-log" id="teleop-log"></div>
       </div>
 
       <div class="section ros-tools-section">
@@ -264,5 +291,9 @@ ros2 launch rosbridge_server rosbridge_websocket_launch.xml port:=9090 address:=
   <script src="/js/ros/rebot-ros-client.js?v=20260520-cn-status"></script>
   <script src="/js/rebot-sim.js?v=20260520-cn-status"></script>
   <script src="/js/ros/rebot-ros-ui.js?v=20260520-cn-status"></script>
+  <!-- [Added by fanhao375 2026-06-29] 平台提示条（WSL ~2Hz 提醒），自研 -->
+  <script src="/js/platform-notice.js?v=20260629-fh"></script>
+  <!-- [Added by fanhao375 2026-06-29] 一键遥操启动器（选端口→启停 LeRobot 物理遥操），自研 -->
+  <script src="/js/teleop-launcher.js?v=20260629-fh"></script>
 </body>
 </html>
