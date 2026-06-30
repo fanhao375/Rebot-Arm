@@ -146,6 +146,75 @@ function stopTeleop() {
   return { ok: true, message: '已请求停止遥操作' };
 }
 
+// [Added by fanhao375 2026-06-30] 训练站后端：起 lerobot-train（照搬遥操范式）+ 解析 stdout 的 step/loss 画曲线
+const TRAIN_SCRIPT = process.env.TRAIN_SCRIPT
+  || path.resolve(ROOT, '..', '..', 'tools', 'lerobot_native_linux', 'start_train.sh');
+let trainProc = null;
+let trainLog = [];
+let trainSeries = []; // [{step, loss}]
+let trainJob = null;  // {dataset, policy, steps, mock}
+// lerobot-train 实际 stdout 的 step 带 K/M 后缀（如 step:20K），mock 则是裸数字（step: 6000）；都要能解析。
+function parseBig(str) {
+  const m = String(str).match(/^([0-9]*\.?[0-9]+)\s*([kKmMgGtT]?)/);
+  if (!m) return NaN;
+  const mult = { k: 1e3, m: 1e6, g: 1e9, t: 1e12 }[(m[2] || '').toLowerCase()] || 1;
+  return parseFloat(m[1]) * mult;
+}
+function pushTrainLog(chunk) {
+  String(chunk).split(/\r?\n/).forEach((line) => {
+    if (!line.trim()) return;
+    trainLog.push(line);
+    const sm = line.match(/step[:\s=]+([0-9]*\.?[0-9]+[kKmMgGtT]?)/i);
+    const lm = line.match(/loss[:\s=]+([0-9]*\.?[0-9]+(?:e[-+]?\d+)?)/i);
+    if (sm && lm) {
+      const step = Math.round(parseBig(sm[1]));
+      const loss = parseFloat(lm[1]);
+      if (!isNaN(step) && !isNaN(loss)) trainSeries.push({ step, loss });
+      if (trainSeries.length > 5000) trainSeries = trainSeries.slice(-5000);
+    }
+  });
+  if (trainLog.length > 200) trainLog = trainLog.slice(-200);
+}
+function trainStatus() {
+  const last = trainSeries.length ? trainSeries[trainSeries.length - 1] : null;
+  return {
+    running: !!trainProc, host: os.platform(), script: TRAIN_SCRIPT, job: trainJob,
+    step: last ? last.step : null, loss: last ? last.loss : null,
+    series: trainSeries, log: trainLog.slice(-30)
+  };
+}
+function startTrain(opts) {
+  if (trainProc) return { ok: false, message: '已有训练在跑' };
+  if (!fs.existsSync(TRAIN_SCRIPT)) return { ok: false, message: '找不到 start_train.sh：' + TRAIN_SCRIPT };
+  opts = opts || {};
+  const env = Object.assign({}, process.env);
+  if (opts.dataset) env.DATASET_REPO_ID = String(opts.dataset);
+  if (opts.policy) env.POLICY_TYPE = String(opts.policy);
+  if (opts.steps) env.STEPS = String(opts.steps);
+  if (opts.batch) env.BATCH = String(opts.batch);
+  if (opts.mock) env.TRAIN_MOCK = '1';
+  trainLog = []; trainSeries = [];
+  trainJob = { dataset: opts.dataset || '默认', policy: opts.policy || 'act', steps: Number(opts.steps) || null, mock: !!opts.mock, startedAt: Date.now() };
+  pushTrainLog('>>> 启动训练' + (opts.mock ? '（演示 mock）' : '') + '：数据集=' + trainJob.dataset + ' 策略=' + trainJob.policy + ' 步数=' + (opts.steps || '默认'));
+  try {
+    trainProc = spawn('bash', [TRAIN_SCRIPT], { cwd: path.dirname(TRAIN_SCRIPT), env });
+  } catch (e) {
+    trainProc = null;
+    return { ok: false, message: '启动失败（本机可能无 bash / 训练环境）：' + e.message };
+  }
+  trainProc.stdout.on('data', pushTrainLog);
+  trainProc.stderr.on('data', pushTrainLog);
+  trainProc.on('exit', (code) => { pushTrainLog('[训练进程退出 code=' + code + ']'); trainProc = null; });
+  trainProc.on('error', (err) => { pushTrainLog('[进程错误] ' + err.message); trainProc = null; });
+  return { ok: true, message: '训练已启动' };
+}
+function stopTrain() {
+  if (!trainProc) return { ok: false, message: '没有在跑的训练' };
+  trainProc.kill('SIGINT');
+  pushTrainLog('>>> 已发送停止信号 (SIGINT)');
+  return { ok: true, message: '已请求停止训练' };
+}
+
 // [Added by fanhao375 2026-06-29] 遥操作控制端点安全闸：仅本机 + POST + 同源
 // 防止 LAN 设备或同机恶意网页(CSRF)用一个 GET/跨源请求远程启动真机运动。
 function isLoopback(req) {
@@ -196,6 +265,12 @@ function requestHandler(req, res) {
     return;
   }
 
+  // [Added by fanhao375 2026-06-30] GPU 监控（训练站第一块真功能）：nvidia-smi → JSON
+  if (urlPath === '/api/gpu') {
+    sendJson(res, 200, gpuInfo());
+    return;
+  }
+
   // [Added by fanhao375 2026-06-29] 一键遥操：列串口 / 状态 / 启动（带端口）/ 停止
   if (urlPath === '/api/teleop/ports') {
     sendJson(res, 200, { host: os.platform(), ports: listPorts() });
@@ -216,6 +291,25 @@ function requestHandler(req, res) {
     if (!teleopGuard(req, res)) return;
     const r = stopTeleop();
     sendJson(res, 200, Object.assign(r, { status: teleopStatus() }));
+    return;
+  }
+
+  // [Added by fanhao375 2026-06-30] 训练站：状态 / 起 / 停（start|stop 过安全闸）
+  if (urlPath === '/api/train/status') {
+    sendJson(res, 200, trainStatus());
+    return;
+  }
+  if (urlPath === '/api/train/start') {
+    if (!teleopGuard(req, res)) return;
+    const q = new URL(req.url, 'http://x').searchParams;
+    const r = startTrain({ dataset: q.get('dataset'), policy: q.get('policy'), steps: q.get('steps'), batch: q.get('batch'), mock: q.get('mock') === '1' });
+    sendJson(res, 200, Object.assign(r, { status: trainStatus() }));
+    return;
+  }
+  if (urlPath === '/api/train/stop') {
+    if (!teleopGuard(req, res)) return;
+    const r = stopTrain();
+    sendJson(res, 200, Object.assign(r, { status: trainStatus() }));
     return;
   }
 
@@ -243,6 +337,28 @@ function requestHandler(req, res) {
   }
 
   sendFile(res, filePath);
+}
+
+// [Added by fanhao375 2026-06-30] GPU 监控：训练站第一块真功能，nvidia-smi → JSON（无 GPU 诚实报错）
+function gpuInfo() {
+  try {
+    const fields = 'name,temperature.gpu,utilization.gpu,utilization.memory,memory.used,memory.total,power.draw,power.limit,clocks.sm,fan.speed';
+    const out = execSync(`nvidia-smi --query-gpu=${fields} --format=csv,noheader,nounits`, { encoding: 'utf8', timeout: 4000 });
+    const num = (v) => { const n = parseFloat(v); return isNaN(n) ? null : n; };
+    const gpus = out.trim().split('\n').filter(Boolean).map((line, i) => {
+      const c = line.split(',').map((s) => s.trim());
+      return {
+        index: i, name: c[0],
+        temp: num(c[1]), gpuUtil: num(c[2]), memUtil: num(c[3]),
+        memUsed: num(c[4]), memTotal: num(c[5]),     // MiB
+        power: num(c[6]), powerLimit: num(c[7]),      // W
+        clock: num(c[8]), fan: num(c[9])              // MHz / %
+      };
+    });
+    return { available: true, gpus };
+  } catch (e) {
+    return { available: false, error: 'nvidia-smi 不可用（本机无 NVIDIA GPU 或未装驱动）。训练监控需在有 GPU 的机器上跑本服务。' };
+  }
 }
 
 // [Added by fanhao375 2026-06-29] 探测本服务宿主平台；WSL 下 USB 经 usbipd 透传，实时遥操约 2Hz

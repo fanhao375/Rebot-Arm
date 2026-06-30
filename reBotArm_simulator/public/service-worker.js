@@ -1,5 +1,5 @@
-// [Modified by fanhao375 2026-06-30] bump ->v8（界面还原上游原始深色，仅保留功能改动）
-const CACHE_NAME = 'rebot-arm-pwa-v8';
+// [Modified by fanhao375 2026-06-30] bump ->v9（HTML 文档改网络优先：cockpit.html/train.html 等页面改动立即可见，离线才回退缓存）
+const CACHE_NAME = 'rebot-arm-pwa-v9';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -46,6 +46,22 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // [Modified by fanhao375 2026-06-30] HTML 文档（页面）网络优先：保证 cockpit.html/train.html 等页面改动立即生效，离线回退缓存
+  const isDoc = request.mode === 'navigate' || request.destination === 'document' || url.pathname.endsWith('.html');
+  if (isDoc) {
+    event.respondWith(
+      fetch(request).then((response) => {
+        if (response && response.status === 200) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        }
+        return response;
+      }).catch(() => caches.match(request))
+    );
+    return;
+  }
+
+  // 其余静态资源（库 / 网格 / CSS / JS）缓存优先：快且可离线
   event.respondWith(
     caches.match(request).then((cached) => {
       if (cached) return cached;

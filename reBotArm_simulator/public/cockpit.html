@@ -227,7 +227,7 @@
       <button class="active" id="nav-cockpit" title="玩">玩</button>
       <button class="locked" title="采数据（待上线）">采</button>
       <button class="locked" title="看数据（待上线）">看</button>
-      <button class="locked" title="训练（待上线）">训</button>
+      <button title="训练（GPU 监控已上线）" onclick="location.href='/train.html'" style="opacity:1;cursor:pointer">训</button>
       <button class="locked" title="部署（待上线）">部</button>
     </nav>
 
@@ -478,7 +478,7 @@ ros2 launch rosbridge_server rosbridge_websocket_launch.xml port:=9090 address:=
             <div class="j-card play" id="j-play"><div class="top"><span class="no" style="color:var(--accent-text)">03</span><span class="j-bdg" style="background:var(--accent);color:var(--accent-ink)">现在可玩</span></div><div class="nm" style="font-size:16px">玩</div><div class="ds" style="color:var(--text2)">浏览器里拖着玩，无需硬件</div><div class="cta">进入驾驶舱 →</div></div>
             <div class="j-card locked"><div class="top"><span class="no">04</span><span class="j-bdg" style="background:var(--surface);color:var(--text3)">锁定</span></div><div class="nm" style="color:var(--text2)">采数据</div><div class="ds" style="color:var(--text3)">遥操录制 episode</div><div class="ft" style="color:var(--text3)">今天: <span class="mono" style="color:var(--accent-text)">lerobot record</span></div></div>
             <div class="j-card locked"><div class="top"><span class="no">05</span><span class="j-bdg" style="background:var(--surface);color:var(--text3)">锁定</span></div><div class="nm" style="color:var(--text2)">看数据</div><div class="ds" style="color:var(--text3)">3D 回放数据集</div><div class="ft" style="color:var(--text3)">LeRobot visualizer</div></div>
-            <div class="j-card locked"><div class="top"><span class="no">06</span><span class="j-bdg" style="background:var(--surface);color:var(--text3)">锁定</span></div><div class="nm" style="color:var(--text2)">训练</div><div class="ds" style="color:var(--text3)">跑策略 · 看 loss</div><div class="ft" style="color:var(--text3)">参考 <span class="mono" style="color:var(--accent-text)">50K / 0.063</span></div></div>
+            <div class="j-card" style="cursor:pointer" onclick="location.href='/train.html'"><div class="top"><span class="no">06</span><span class="j-bdg" style="background:rgba(45,224,138,.16);color:var(--accent-text)">已通</span></div><div class="nm">训练</div><div class="ds" style="color:var(--text2)">GPU 监控 + 起训 + loss 曲线</div><div class="ft">进入训练站 ›</div></div>
             <div class="j-card locked"><div class="top"><span class="no">07</span><span class="j-bdg" style="background:var(--surface);color:var(--text3)">锁定</span></div><div class="nm" style="color:var(--text2)">部署</div><div class="ds" style="color:var(--text3)">真臂上跑策略</div><div class="ft" style="color:rgba(255,140,140,.6)">需真机 · 谨慎</div></div>
           </div>
         </div>

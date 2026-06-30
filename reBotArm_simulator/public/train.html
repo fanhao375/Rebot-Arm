@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<!--
+  reBot 驾驶舱 · 训练站 train.html
+  [Built by fanhao375 2026-06-30] 训练监控第一块：GPU 实时监控卡（/api/gpu → nvidia-smi）。
+  参考 Ostris ai-toolkit 的 Dashboard 布局；下面训练队列/任务/loss 待接 LeRobot。
+  回退：删 train.html + 删 server.js 的 /api/gpu 路由与 gpuInfo()。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>reBot 驾驶舱 · 训练</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  :root{
+    --bg:#0A0D0C;--rail:rgba(7,11,9,.92);--chrome:rgba(8,12,10,.96);
+    --text:#fff;--text2:rgba(255,255,255,.6);--text3:rgba(255,255,255,.42);
+    --line:rgba(255,255,255,.08);--surface:rgba(255,255,255,.05);--surface-bd:rgba(255,255,255,.1);
+    --card:rgba(255,255,255,.04);--card-bd:rgba(255,255,255,.08);
+    --accent:#2DE08A;--accent-ink:#06241A;--accent-text:#3DF0A0;--accent-soft:rgba(45,224,138,.14);--accent-soft-bd:rgba(45,224,138,.32);
+    --warn:#FFB341;--info:#8FC0FF;--danger:#FF8A92;--blue:#5AA9FF;--purple:#B98AFF;
+  }
+  body{background:var(--bg);color:var(--text);font-family:'Space Grotesk','PingFang SC','Microsoft YaHei',system-ui,sans-serif;font-size:13px}
+  .mono{font-family:'IBM Plex Mono',monospace}
+  .app{min-height:100vh;display:flex}
+
+  .rail{width:64px;flex:none;background:var(--rail);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:4px;position:sticky;top:0;height:100vh}
+  .rail .logo{width:36px;height:36px;border-radius:11px;background:linear-gradient(145deg,#3DF0A0,#15A862);display:flex;align-items:center;justify-content:center;color:#062317;font-weight:700;font-size:12px;margin-bottom:6px}
+  .rail a,.rail button{font-family:inherit;cursor:pointer;width:40px;height:38px;border-radius:11px;border:none;background:transparent;color:var(--text3);font-size:14px;display:flex;align-items:center;justify-content:center;text-decoration:none}
+  .rail a.sm{font-size:11px;font-weight:600}
+  .rail a.active{border:1px solid var(--accent-soft-bd);background:var(--accent-soft);color:var(--accent-text);font-weight:600}
+  .rail a.locked{opacity:.55;cursor:default}
+  .rail .div{width:30px;height:1px;background:var(--line);margin:4px 0}
+
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;min-height:100vh}
+  .topbar{height:52px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 18px;background:var(--chrome);border-bottom:1px solid var(--line)}
+  .topbar .ttl{font-size:15px;font-weight:600}
+  .topbar .sub{font-size:11px;color:var(--text3);margin-left:10px}
+  .topbar .upd{font-size:11px;color:var(--text3)}
+
+  .body{flex:1;overflow-y:auto;padding:22px 26px}
+  .sec-h{font-size:13px;font-weight:600;margin:0 0 12px;display:flex;align-items:center;justify-content:space-between}
+  .sec-h .tag{font-size:10px;color:var(--text3);font-family:'IBM Plex Mono',monospace}
+
+  .gpu-card{border-radius:16px;background:var(--card);border:1px solid var(--card-bd);padding:18px 20px;margin-bottom:22px;position:relative;overflow:hidden}
+  .gpu-head{display:flex;align-items:center;gap:10px;margin-bottom:18px}
+  .gpu-name{font-size:15px;font-weight:600}
+  .gpu-idx{font-size:10px;padding:2px 8px;border-radius:6px;background:var(--surface);border:1px solid var(--surface-bd);color:var(--text2);font-family:'IBM Plex Mono',monospace}
+  .gpu-grid{display:grid;grid-template-columns:1fr 1.6fr;gap:24px}
+  .stat{display:flex;align-items:flex-start;gap:9px;margin-bottom:16px}
+  .stat .ic{font-size:14px;line-height:1.2;width:18px;text-align:center}
+  .stat .l{font-size:11px;color:var(--text3)}
+  .stat .v{font-size:16px;font-weight:600;margin-top:2px}
+  .bar-row{margin-bottom:16px}
+  .bar-top{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+  .bar-top .ic{font-size:13px}
+  .bar-top .l{font-size:11px;color:var(--text3)}
+  .bar-top .pct{font-size:11px;font-weight:600;margin-left:auto;font-family:'IBM Plex Mono',monospace}
+  .bar{height:7px;border-radius:99px;background:var(--surface);overflow:hidden}
+  .bar > i{display:block;height:100%;border-radius:99px;transition:width .5s ease}
+  .bar-sub{font-size:10.5px;color:var(--text3);margin-top:5px;font-family:'IBM Plex Mono',monospace}
+
+  .ph{border-radius:14px;background:var(--card);border:1px dashed var(--card-bd);padding:18px 20px;margin-bottom:14px}
+  .ph .h{font-size:13px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+  .ph .soon{font-size:9.5px;padding:2px 7px;border-radius:5px;background:rgba(255,179,65,.16);color:var(--warn);font-weight:700}
+  .ph p{margin:0;font-size:11.5px;color:var(--text3);line-height:1.6}
+  .ph code{font-family:'IBM Plex Mono',monospace;color:var(--accent-text);background:rgba(45,224,138,.08);padding:1px 5px;border-radius:4px}
+  .ph-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+
+  .err{border-radius:14px;border:1px solid rgba(255,107,116,.35);background:rgba(40,8,10,.5);padding:16px 18px;color:#FFC9CD;font-size:12.5px;line-height:1.6}
+
+  .job{border-radius:14px;background:var(--card);border:1px solid var(--card-bd);padding:16px 18px;margin-bottom:14px}
+  .job-form{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px}
+  .job-form label{display:flex;flex-direction:column;gap:5px;font-size:10.5px;color:var(--text3)}
+  .job-form input,.job-form select{padding:8px 10px;border:1px solid var(--card-bd);border-radius:9px;background:rgba(255,255,255,.04);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:12px;min-width:120px}
+  .job-form input[type=text]{min-width:230px}
+  .job-form label.ck{flex-direction:row;align-items:center;gap:7px;font-size:11.5px;color:var(--text2);align-self:flex-end}
+  .job-form label.ck input{min-width:0;width:16px;height:16px;accent-color:var(--accent)}
+  .job-btns{display:flex;gap:8px;margin-bottom:12px}
+  .btn-go{padding:9px 18px;border:none;border-radius:9px;background:var(--accent);color:var(--accent-ink);font-weight:700;font-size:13px;cursor:pointer;font-family:inherit}
+  .btn-stop{padding:9px 16px;border:1px solid rgba(255,107,116,.4);border-radius:9px;background:rgba(255,107,116,.08);color:var(--danger);font-weight:600;font-size:13px;cursor:pointer;font-family:inherit}
+  .job-status{display:flex;gap:26px;align-items:center;flex-wrap:wrap}
+  .js-row{display:flex;flex-direction:column;gap:3px}
+  .js-row span{font-size:10px;color:var(--text3)}
+  .js-row b{font-size:14px}
+  .prog{flex:1;min-width:160px;height:7px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden}
+  .prog>i{display:block;height:100%;width:0;background:var(--accent);border-radius:99px;transition:width .4s}
+  .chart{position:relative;border-radius:14px;background:var(--card);border:1px solid var(--card-bd);padding:10px;height:220px;margin-bottom:14px}
+  .chart svg{width:100%;height:200px;display:block}
+  .chart-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--text3);text-align:center;padding:0 20px}
+</style>
+</head>
+<body>
+  <div class="app">
+    <nav class="rail">
+      <div class="logo">rB</div>
+      <a class="sm" href="/cockpit.html" title="总览/驾驶舱">玩</a>
+      <div class="div"></div>
+      <a class="locked" title="装配（文档）">装</a>
+      <a class="locked" title="连接">连</a>
+      <a href="/cockpit.html" title="玩 · 驾驶舱">▦</a>
+      <a class="locked" title="采数据（待上线）">采</a>
+      <a class="locked" title="看数据（待上线）">看</a>
+      <a class="active" title="训练" href="/train.html">训</a>
+      <a class="locked" title="部署（待上线）">部</a>
+    </nav>
+
+    <div class="main">
+      <header class="topbar">
+        <div><span class="ttl">训练 · Dashboard</span><span class="sub">GPU 监控 + 训练队列（建设中）</span></div>
+        <div class="upd" id="upd">—</div>
+      </header>
+
+      <div class="body">
+        <div class="sec-h">GPU 监控 <span class="tag">实时 · nvidia-smi · 每 2s</span></div>
+        <div id="gpu-wrap"><div class="gpu-card"><div class="bar-sub">读取中…</div></div></div>
+
+        <div class="sec-h" style="margin-top:8px">训练任务 <span class="tag" id="t-tag">空闲</span></div>
+        <div class="job">
+          <div class="job-form">
+            <label>数据集 repo_id<input id="t-dataset" type="text" value="fanhao375/block_in_box"></label>
+            <label>策略
+              <select id="t-policy">
+                <option value="act">act</option>
+                <option value="diffusion">diffusion</option>
+                <option value="smolvla">smolvla</option>
+                <option value="pi0">pi0</option>
+              </select>
+            </label>
+            <label>步数 steps<input id="t-steps" type="number" value="80000" step="1000" min="100"></label>
+            <label>batch<input id="t-batch" type="number" value="8" min="1"></label>
+            <label class="ck"><input id="t-mock" type="checkbox" checked> 演示模式(mock,不跑真 GPU)</label>
+          </div>
+          <div class="job-btns">
+            <button id="t-start" class="btn-go">▶ 开始训练</button>
+            <button id="t-stop" class="btn-stop" disabled style="opacity:.5">■ 停止</button>
+          </div>
+          <div class="job-status">
+            <div class="js-row"><span>状态</span><b id="t-st">空闲</b></div>
+            <div class="js-row"><span>步数</span><b id="t-step" class="mono">—</b></div>
+            <div class="js-row"><span>当前 loss</span><b id="t-loss" class="mono">—</b></div>
+            <div class="prog"><i id="t-prog"></i></div>
+          </div>
+          <div id="t-msg" style="font-size:11px;color:var(--text3);margin-top:10px;font-family:'IBM Plex Mono',monospace"></div>
+        </div>
+
+        <div class="sec-h" style="margin-top:14px">Loss 曲线 <span class="tag">解析 lerobot-train stdout · 无需 wandb · 对数刻度</span></div>
+        <div class="chart">
+          <svg id="loss-svg" viewBox="0 0 600 200" preserveAspectRatio="none"></svg>
+          <div class="chart-empty" id="loss-empty">还没有数据点 —— 点「开始训练」（先勾「演示模式」可在无 GPU 时看曲线跑通）</div>
+        </div>
+
+        <div class="sec-h" style="margin-top:14px">采样回放 <span class="tag">下一步 · 依赖部署站 eval</span></div>
+        <div class="ph">
+          <div class="h">🎬 采样回放 <span class="soon">待接</span></div>
+          <p>训练好后用<b>部署站</b>跑 eval rollout，把视频回放在这看策略抓得行不行。先占位，等部署站（阶段 4）做完接上。</p>
+        </div>
+
+        <div class="ph" style="border-style:solid;border-color:var(--card-bd);margin-top:8px">
+          <div class="h" style="color:var(--text2)">🧭 说明</div>
+          <p>真训练要跑在<b>有 GPU 的那台机</b>(WSL 5060Ti 上的 LeRobot)：在那台起 <code>node server.js</code>、本页面指向它即可。本机无 GPU 时勾<b>演示模式</b>能把表单→起任务→解析 loss→画曲线整条链路跑通验证。续训/checkpoint 落在 <code>outputs/train/web_run/checkpoints/</code>。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+
+  function pct(v) { return v == null ? '—' : Math.round(v) + '%'; }
+  function colorFor(v, warnAt, hotAt) { v = v || 0; return v >= hotAt ? 'var(--danger)' : v >= warnAt ? 'var(--warn)' : 'var(--accent)'; }
+
+  function renderGpu(data) {
+    if (!data || !data.available) {
+      $('gpu-wrap').innerHTML = '<div class="err">⚠ ' + ((data && data.error) || 'GPU 读取失败') + '</div>';
+      return;
+    }
+    var html = '';
+    data.gpus.forEach(function (g) {
+      var memUsedGB = g.memUsed != null ? (g.memUsed / 1024).toFixed(1) : '—';
+      var memTotGB = g.memTotal != null ? (g.memTotal / 1024).toFixed(1) : '—';
+      var memPct = (g.memUsed != null && g.memTotal) ? (g.memUsed / g.memTotal * 100) : 0;
+      var powPct = (g.power != null && g.powerLimit) ? (g.power / g.powerLimit * 100) : 0;
+      html +=
+        '<div class="gpu-card">' +
+          '<div class="gpu-head"><span class="gpu-name">' + (g.name || 'GPU') + '</span><span class="gpu-idx mono">#' + g.index + '</span></div>' +
+          '<div class="gpu-grid">' +
+            '<div>' +
+              '<div class="stat"><span class="ic" style="color:var(--warn)">🌡</span><div><div class="l">Temperature</div><div class="v" style="color:' + colorFor(g.temp, 70, 85) + '">' + (g.temp != null ? g.temp + '°C' : '—') + '</div></div></div>' +
+              '<div class="stat"><span class="ic" style="color:var(--blue)">🌀</span><div><div class="l">Fan Speed</div><div class="v">' + pct(g.fan) + '</div></div></div>' +
+              '<div class="stat"><span class="ic" style="color:var(--purple)">⏱</span><div><div class="l">Clock Speed</div><div class="v">' + (g.clock != null ? g.clock + ' MHz' : '—') + '</div></div></div>' +
+            '</div>' +
+            '<div>' +
+              '<div class="bar-row"><div class="bar-top"><span class="ic">▦</span><span class="l">GPU Load</span><span class="pct">' + pct(g.gpuUtil) + '</span></div>' +
+                '<div class="bar"><i style="width:' + (g.gpuUtil || 0) + '%;background:' + colorFor(g.gpuUtil, 80, 95) + '"></i></div></div>' +
+              '<div class="bar-row"><div class="bar-top"><span class="ic">▥</span><span class="l">Memory</span><span class="pct">' + (memPct ? memPct.toFixed(1) + '%' : '—') + '</span></div>' +
+                '<div class="bar"><i style="width:' + memPct + '%;background:' + colorFor(memPct, 85, 95) + '"></i></div>' +
+                '<div class="bar-sub">' + memUsedGB + ' GB / ' + memTotGB + ' GB</div></div>' +
+              '<div class="bar-row"><div class="bar-top"><span class="ic" style="color:var(--warn)">⚡</span><span class="l">Power Draw</span><span class="pct">' + (g.power != null ? g.power.toFixed(1) + 'W' : '—') + '</span></div>' +
+                '<div class="bar"><i style="width:' + powPct + '%;background:' + colorFor(powPct, 85, 98) + '"></i></div>' +
+                '<div class="bar-sub">' + (g.power != null ? g.power.toFixed(1) : '—') + 'W / ' + (g.powerLimit != null ? g.powerLimit.toFixed(1) : '—') + 'W</div></div>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+    });
+    $('gpu-wrap').innerHTML = html;
+    var d = new Date();
+    $('upd').textContent = 'Last updated: ' + d.toTimeString().slice(0, 8);
+  }
+
+  function poll() {
+    fetch('/api/gpu').then(function (r) { return r.json(); }).then(renderGpu)
+      .catch(function () { $('gpu-wrap').innerHTML = '<div class="err">⚠ 连不上 /api/gpu，确认服务在跑</div>'; });
+  }
+  poll();
+  setInterval(poll, 2000);
+
+  // ===== 训练任务：起/停 + 状态轮询 + loss 曲线 =====
+  function setTag(state, running) {
+    $('t-tag').textContent = state;
+    $('t-st').textContent = state;
+    $('t-start').disabled = running;
+    $('t-start').style.opacity = running ? '.5' : '1';
+    $('t-stop').disabled = !running;
+    $('t-stop').style.opacity = running ? '1' : '.5';
+  }
+
+  function drawLoss(series, totalSteps) {
+    var svg = $('loss-svg');
+    if (!series || !series.length) { svg.innerHTML = ''; $('loss-empty').style.display = 'flex'; return; }
+    $('loss-empty').style.display = 'none';
+    var W = 600, H = 200, pad = 26;
+    var xMax = totalSteps || series[series.length - 1].step || 1;
+    var ys = series.map(function (p) { return Math.log10(Math.max(p.loss, 1e-4)); });
+    var yMin = Math.min.apply(null, ys), yMax = Math.max.apply(null, ys);
+    var yr = (yMax - yMin) || 1;
+    var X = function (s) { return pad + (s / xMax) * (W - 2 * pad); };
+    var Y = function (l) { return pad + (1 - (Math.log10(Math.max(l, 1e-4)) - yMin) / yr) * (H - 2 * pad); };
+    var pts = series.map(function (p) { return X(p.step).toFixed(1) + ',' + Y(p.loss).toFixed(1); }).join(' ');
+    var last = series[series.length - 1];
+    var lossMax = Math.max.apply(null, series.map(function (p) { return p.loss; }));
+    var lossMin = Math.min.apply(null, series.map(function (p) { return p.loss; }));
+    svg.innerHTML =
+      '<line x1="' + pad + '" y1="' + (H - pad) + '" x2="' + (W - pad) + '" y2="' + (H - pad) + '" stroke="rgba(255,255,255,.12)"/>' +
+      '<line x1="' + pad + '" y1="' + pad + '" x2="' + pad + '" y2="' + (H - pad) + '" stroke="rgba(255,255,255,.12)"/>' +
+      '<polyline fill="none" stroke="#2DE08A" stroke-width="2" points="' + pts + '"/>' +
+      '<circle cx="' + X(last.step).toFixed(1) + '" cy="' + Y(last.loss).toFixed(1) + '" r="3" fill="#3DF0A0"/>' +
+      '<text x="' + (pad + 2) + '" y="' + (pad - 6) + '" fill="rgba(255,255,255,.5)" font-size="10" font-family="monospace">loss(对数) 越低越好 · max ' + lossMax.toFixed(3) + ' → min ' + lossMin.toFixed(3) + '</text>' +
+      '<text x="' + (W - pad) + '" y="' + (H - pad + 14) + '" text-anchor="end" fill="rgba(255,255,255,.4)" font-size="9" font-family="monospace">step ' + xMax + '</text>';
+  }
+
+  function renderTrain(s) {
+    if (!s) return;
+    var running = !!s.running;
+    setTag(running ? '训练中' : (s.job ? '已结束' : '空闲'), running);
+    $('t-step').textContent = (s.step != null ? s.step : '—');
+    $('t-loss').textContent = (s.loss != null ? Number(s.loss).toFixed(4) : '—');
+    var total = (s.job && s.job.steps) || ($('t-steps').value | 0);
+    var p = (s.step != null && total) ? Math.min(100, s.step / total * 100) : 0;
+    $('t-prog').style.width = p + '%';
+    drawLoss(s.series, total);
+  }
+
+  var trainTimer = null;
+  function pollTrain() {
+    fetch('/api/train/status').then(function (r) { return r.json(); }).then(function (s) {
+      renderTrain(s);
+      if (!s.running && trainTimer) { clearInterval(trainTimer); trainTimer = null; }
+    }).catch(function () {});
+  }
+  function startTrainPoll() { if (!trainTimer) { pollTrain(); trainTimer = setInterval(pollTrain, 1000); } }
+
+  $('t-start').onclick = function () {
+    var qs = 'dataset=' + encodeURIComponent($('t-dataset').value.trim()) +
+      '&policy=' + encodeURIComponent($('t-policy').value) +
+      '&steps=' + encodeURIComponent($('t-steps').value | 0) +
+      '&batch=' + encodeURIComponent($('t-batch').value | 0) +
+      ($('t-mock').checked ? '&mock=1' : '');
+    $('t-msg').textContent = '正在启动…';
+    fetch('/api/train/start?' + qs, { method: 'POST' }).then(function (r) { return r.json(); }).then(function (res) {
+      $('t-msg').textContent = (res.ok ? '✔ ' : '✖ ') + (res.message || '');
+      if (res.ok) startTrainPoll();
+    }).catch(function (e) { $('t-msg').textContent = '✖ 启动失败：' + e.message; });
+  };
+  $('t-stop').onclick = function () {
+    $('t-msg').textContent = '正在停止…';
+    fetch('/api/train/stop', { method: 'POST' }).then(function (r) { return r.json(); }).then(function (res) {
+      $('t-msg').textContent = (res.ok ? '✔ ' : '✖ ') + (res.message || '');
+    }).catch(function (e) { $('t-msg').textContent = '✖ 停止失败：' + e.message; });
+  };
+
+  // 进页面先拉一次状态：若已有训练在跑（刷新/重连）则接管轮询
+  fetch('/api/train/status').then(function (r) { return r.json(); }).then(function (s) {
+    renderTrain(s);
+    if (s.running) startTrainPoll();
+  }).catch(function () {});
+})();
+</script>
+</body>
+</html>
