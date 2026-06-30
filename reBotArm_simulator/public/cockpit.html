@@ -51,6 +51,11 @@
   .pill{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:8px;background:var(--surface);border:1px solid var(--surface-bd)}
   .pill .k{font-size:10px;color:var(--text3)}
   .pill .v{font-size:11.5px;font-weight:600}
+  /* [孪生 surface] 顶栏「跟随真机」开关：代理已有 #ros-mirror，纯叠加，删本块+按钮+脚本即回退 */
+  .pill.twin{cursor:pointer;font-family:inherit;color:var(--text);transition:border-color .2s,background .2s}
+  .pill.twin.on{border-color:var(--accent-soft-bd);background:var(--accent-soft)}
+  .pill.twin .dot{width:7px;height:7px;border-radius:50%;background:var(--text3);transition:background .2s,box-shadow .2s}
+  .pill.twin.on .dot{background:var(--accent);box-shadow:0 0 8px var(--accent)}
 
   .stage{flex:1;display:flex;min-height:0}
   .journey{flex:1;display:none}
@@ -241,6 +246,7 @@
           <div class="pill"><span class="k mono">平台</span><span class="v" id="pf-v">…</span></div>
           <div class="pill"><span class="k mono">源</span><span class="v" id="src-v">浏览器仿真</span></div>
           <div class="pill"><span class="k mono">模式</span><span class="v" id="mode-pill" style="color:var(--accent-text)">仿真</span></div>
+          <button class="pill twin" id="twin-toggle" type="button" title="实时跟随真机/仿真后端的关节状态（只读孪生）：开启后订阅 /joint_states 把真臂动作映射到这台 3D，并显示 sim↔real 误差。"><span class="dot"></span><span class="k mono">跟随</span><span class="v" id="twin-v">关</span></button>
         </div>
       </header>
 
@@ -653,6 +659,35 @@ ros2 launch rosbridge_server rosbridge_websocket_launch.xml port:=9090 address:=
         $('pf-v').textContent = { windows: 'Windows', wsl: 'WSL', linux: 'Linux', mac: 'macOS' }[host] || (info && info.label) || host;
       }).catch(function () { $('pf-v').textContent = '未知'; });
     }
+  })();
+  </script>
+
+  <!-- [孪生 surface · 纯叠加] 顶栏「跟随」开关 = 代理已有 #ros-mirror（埋在 ROS 面板里那个），并把 sim↔real 误差提到明面。
+       不碰引擎/ros-ui，删本 script + 顶栏按钮 + .pill.twin 样式即完全回退。 -->
+  <script>
+  (function () {
+    var $ = function (id) { return document.getElementById(id); };
+    var btn = $('twin-toggle'), v = $('twin-v'), mir = $('ros-mirror'), fb = $('ros-feedback-error'), st = $('ros-status');
+    if (!btn || !mir) return;
+    btn.addEventListener('click', function () {
+      mir.checked = !mir.checked;
+      mir.dispatchEvent(new Event('change', { bubbles: true })); // 让 watchMode 与 ros-ui 感知
+      upd();
+    });
+    function connected() { return st && /在线|已连接|connected|open/i.test(st.textContent || ''); }
+    function upd() {
+      var on = mir.checked;
+      btn.classList.toggle('on', on);
+      if (!on) { v.textContent = '关'; v.style.color = 'var(--text3)'; return; }
+      if (!connected()) { v.textContent = '等待连接'; v.style.color = 'var(--warn)'; return; }
+      var txt = (fb && fb.textContent || '').trim();
+      if (!txt || /等待|waiting/i.test(txt)) { v.textContent = '等待真机'; v.style.color = 'var(--warn)'; return; }
+      var m = txt.match(/最大\s*([\d.]+)/); // ros-feedback-error 文案：「最大 X 度 关节 / RMS Y 度」
+      if (m) { v.textContent = '跟随 Δ' + m[1] + '°'; v.style.color = parseFloat(m[1]) < 2 ? 'var(--accent-text)' : 'var(--warn)'; }
+      else { v.textContent = '跟随中'; v.style.color = 'var(--accent-text)'; }
+      btn.title = '实时跟随真机 · ' + txt;
+    }
+    setInterval(upd, 500); upd();
   })();
   </script>
 </body>
