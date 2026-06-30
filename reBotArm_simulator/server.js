@@ -316,25 +316,34 @@ function stopRecord() {
 }
 
 // [Added by fanhao375 2026-06-30] 看数据站后端：列数据集 + parquet 质检 + 视频回放 + 删废条
-// 数据集落 ~/.cache/huggingface/lerobot/<owner>/<name>；视频 videos/observation.images.{top,wrist}/chunk-000/*.mp4。
-const LEROBOT_HOME = process.env.LEROBOT_HOME
+// 数据集(v3.0)落 <HF_LEROBOT_HOME>/<owner>/<name>；视频 videos/<vid_key>/chunk-NNN/file-NNN.mp4（多 episode 拼一个文件）。
+// [M1 修复] lerobot 现用 HF_LEROBOT_HOME（LEROBOT_HOME 已废弃）；优先它，保证列举/质检/删除三处目录一致。
+const LEROBOT_HOME = process.env.HF_LEROBOT_HOME || process.env.LEROBOT_HOME
   || path.join(os.homedir(), '.cache', 'huggingface', 'lerobot');
 const QUALITY_SCRIPT = process.env.QUALITY_SCRIPT
   || path.resolve(ROOT, '..', '..', 'tools', 'lerobot_native_linux', 'dataset_quality.py');
 const PYTHON_BIN = process.env.PYTHON_BIN || 'python3';
 
-// repo_id 来自前端 → 必须防路径穿越：只允许 owner/name 两段、字符受限、解析后须落在 LEROBOT_HOME 内。
+// repo_id 来自前端 → 必须防路径穿越：只允许 owner/name 两段、字符受限、解析后须严格落在 LEROBOT_HOME 子目录内。
 function safeDatasetPath(repoId) {
   if (!repoId || !/^[\w.-]+\/[\w.-]+$/.test(repoId)) return null;
   const p = path.resolve(path.join(LEROBOT_HOME, repoId));
   const base = path.resolve(LEROBOT_HOME);
-  if (p !== base && !p.startsWith(base + path.sep)) return null;
+  if (!p.startsWith(base + path.sep)) return null; // 不放行 base 本身（数据集必是子目录）
   return p;
 }
 function isDataset(dir) {
   return fs.existsSync(path.join(dir, 'data')) || fs.existsSync(path.join(dir, 'meta'));
 }
 function countEpisodes(dir) {
+  // v3.0 一个 parquet 文件含多条 episode，数文件会少报；优先读 meta/info.json 的 total_episodes（准确）。
+  try {
+    const info = path.join(dir, 'meta', 'info.json');
+    if (fs.existsSync(info)) {
+      const j = JSON.parse(fs.readFileSync(info, 'utf8'));
+      if (typeof j.total_episodes === 'number') return j.total_episodes;
+    }
+  } catch (e) { /* 回退到数文件 */ }
   try {
     let n = 0;
     const dataDir = path.join(dir, 'data');
@@ -400,34 +409,35 @@ function datasetEpisodes(repoId, mock, cb) {
   } catch (e) {
     return cb({ ok: false, error: '起 python 失败（本机可能无 python3）：' + e.message });
   }
-  const timer = setTimeout(() => { try { proc.kill(); } catch (e) {} cb({ ok: false, error: '质检超时（数据集太大或卡住）' }); }, 60000);
+  // [S2 修复] done 守卫：timeout 杀进程后 close 会再触发 → 不加守卫会二次 sendJson → 未捕获异常崩整服务。
+  let done = false;
+  const finish = (result) => { if (done) return; done = true; clearTimeout(timer); cb(result); };
+  const timer = setTimeout(() => { try { proc.kill(); } catch (e) {} finish({ ok: false, error: '质检超时（数据集太大或卡住），已中止' }); }, 60000);
   proc.stdout.on('data', (d) => { out += d; });
   proc.stderr.on('data', (d) => { err += d; });
-  proc.on('error', (e) => { clearTimeout(timer); cb({ ok: false, error: '起 python 失败：' + e.message }); });
+  proc.on('error', (e) => finish({ ok: false, error: '起 python 失败（本机可能无 python3 / 缺 pandas）：' + e.message }));
   proc.on('close', () => {
-    clearTimeout(timer);
     const line = out.trim().split(/\r?\n/).filter(Boolean).pop() || '';
-    try { cb(JSON.parse(line)); }
-    catch (e) { cb({ ok: false, error: '质检输出解析失败：' + (err.trim() || out.trim() || e.message).slice(0, 400) }); }
+    try { finish(JSON.parse(line)); }
+    catch (e) { finish({ ok: false, error: '质检输出解析失败：' + (err.trim() || out.trim() || e.message).slice(0, 400) }); }
   });
 }
 
-// 视频回放（带 HTTP Range，支持 <video> 拖动）。cam 白名单，ep 取整，路径须落在数据集内。
-function datasetVideoPath(repoId, cam, ep) {
+// [S1 修复] 视频回放：v3.0 是 videos/<vid_key>/chunk-NNN/file-NNN.mp4（多 episode 拼一个文件，不是一 ep 一文件）。
+// 前端从质检结果拿到每条每路相机的 chunk/file（来自 meta/episodes），按 (cam,chunk,file) 取文件，再用 #t=from,to 截段播。
+// cam 受限为字母数字下划线 → 拼成 vid_key observation.images.<cam>；chunk/file 取整；路径须落数据集内。
+function datasetVideoPath(repoId, cam, chunk, file) {
   const dir = safeDatasetPath(repoId);
   if (!dir) return null;
-  if (cam !== 'top' && cam !== 'wrist') return null;
-  const epi = parseInt(ep, 10);
-  if (isNaN(epi) || epi < 0) return null;
-  const camDir = path.join(dir, 'videos', 'observation.images.' + cam, 'chunk-000');
-  const padded = String(epi).padStart(6, '0');
-  const direct = path.join(camDir, 'episode_' + padded + '.mp4');
-  if (fs.existsSync(direct)) return direct;
-  // 兜底：目录命名有出入时按 episode 号 glob 一下
-  try {
-    const hit = fs.readdirSync(camDir).find((n) => n.indexOf(padded) >= 0 && /\.mp4$/i.test(n));
-    if (hit) return path.join(camDir, hit);
-  } catch (e) { /* no dir */ }
+  if (!/^[a-zA-Z0-9_]+$/.test(cam || '')) return null;
+  const ci = parseInt(chunk, 10);
+  const fi = parseInt(file, 10);
+  if (isNaN(ci) || ci < 0 || isNaN(fi) || fi < 0) return null;
+  const rel = path.join('videos', 'observation.images.' + cam,
+    'chunk-' + String(ci).padStart(3, '0'), 'file-' + String(fi).padStart(3, '0') + '.mp4');
+  const p = path.resolve(path.join(dir, rel));
+  if (!p.startsWith(path.resolve(dir) + path.sep)) return null; // 再次确认未逃逸出数据集
+  if (fs.existsSync(p)) return p;
   return null;
 }
 function sendVideoFile(req, res, filePath) {
@@ -439,8 +449,13 @@ function sendVideoFile(req, res, filePath) {
       fs.createReadStream(filePath).pipe(res); return;
     }
     const m = /bytes=(\d*)-(\d*)/.exec(range) || [];
-    let start = m[1] ? parseInt(m[1], 10) : 0;
-    let end = m[2] ? parseInt(m[2], 10) : stat.size - 1;
+    let start, end;
+    if (m[1] === '' && m[2]) { // 后缀范围 bytes=-N：取末尾 N 字节
+      start = Math.max(0, stat.size - parseInt(m[2], 10)); end = stat.size - 1;
+    } else {
+      start = m[1] ? parseInt(m[1], 10) : 0;
+      end = m[2] ? parseInt(m[2], 10) : stat.size - 1;
+    }
     if (isNaN(start) || start < 0) start = 0;
     if (isNaN(end) || end >= stat.size) end = stat.size - 1;
     if (start > end) { res.writeHead(416, { 'Content-Range': 'bytes */' + stat.size }); res.end(); return; }
@@ -457,10 +472,12 @@ function deleteEpisodes(repoId, indices, cb) {
   const idx = String(indices || '').split(',').map((s) => parseInt(s, 10)).filter((n) => !isNaN(n) && n >= 0);
   if (!idx.length) return cb({ ok: false, message: '没选要删的 episode' });
   let out = '', err = '';
-  let proc;
+  let proc, done = false;
+  const finish = (result) => { if (done) return; done = true; cb(result); };
   try {
     proc = spawn('lerobot-edit-dataset', [
       '--repo_id=' + repoId,
+      '--root=' + LEROBOT_HOME, // [M1 修复] 显式指定根，和列举/质检同一目录，避免 HF_LEROBOT_HOME 自定义路径下删错
       '--operation.type=delete_episodes',
       '--operation.episode_indices=[' + idx.join(',') + ']'
     ], { env: Object.assign({}, process.env, { HF_HUB_OFFLINE: '1' }) });
@@ -469,8 +486,8 @@ function deleteEpisodes(repoId, indices, cb) {
   }
   proc.stdout.on('data', (d) => { out += d; });
   proc.stderr.on('data', (d) => { err += d; });
-  proc.on('error', (e) => cb({ ok: false, message: '起删除工具失败：' + e.message }));
-  proc.on('close', (code) => cb({ ok: code === 0, message: code === 0 ? ('已删 ' + idx.length + ' 条（原数据自动备份为 <repo_id>_old，重建需耐心等编码）' ) : ('删除失败 code=' + code + '：' + (err.trim() || out.trim()).slice(0, 400)) }));
+  proc.on('error', (e) => finish({ ok: false, message: '起删除工具失败（需在激活的 lerobot conda 环境内启动本服务）：' + e.message }));
+  proc.on('close', (code) => finish({ ok: code === 0, message: code === 0 ? ('已删 ' + idx.length + ' 条（原数据自动备份为 <repo_id>_old，重建需耐心等编码）') : ('删除失败 code=' + code + '：' + (err.trim() || out.trim()).slice(0, 400)) }));
 }
 
 // [Added by fanhao375 2026-06-29] 遥操作控制端点安全闸：仅本机 + POST + 同源
@@ -612,7 +629,7 @@ function requestHandler(req, res) {
   }
   if (urlPath === '/api/dataset/video') {
     const q = new URL(req.url, 'http://x').searchParams;
-    const fp = datasetVideoPath(q.get('id'), q.get('cam'), q.get('ep'));
+    const fp = datasetVideoPath(q.get('id'), q.get('cam'), q.get('chunk'), q.get('file'));
     if (!fp) { sendJson(res, 404, { error: '视频不存在或参数非法' }); return; }
     sendVideoFile(req, res, fp);
     return;

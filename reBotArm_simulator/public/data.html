@@ -187,18 +187,22 @@
       renderEpisodes();
     }).catch(function (e) { $('ep-grid').innerHTML = '<div class="err">连不上 /api/dataset/episodes：' + esc(e.message) + '</div>'; });
   }
-  function vid(cam, ep) {
+  function vid(cam, e) {
     if (state.mock) return '<div class="vwrap"><span class="vlbl">' + cam + '</span><div class="vph">演示模式<br>无视频</div></div>';
-    var src = '/api/dataset/video?id=' + encodeURIComponent(state.id) + '&cam=' + cam + '&ep=' + ep;
-    return '<div class="vwrap"><span class="vlbl">' + cam + '</span>' +
-      '<video muted loop playsinline preload="metadata" controls src="' + src + '" ' +
-      'onerror="this.style.display=\'none\';this.insertAdjacentHTML(\'afterend\',\'<div class=&quot;vph&quot;>无此视频<br>(' + cam + ')</div>\')"></video></div>';
+    var loc = e.videos && e.videos[cam];
+    if (!loc) return '<div class="vwrap"><span class="vlbl">' + cam + '</span><div class="vph">无 ' + cam + ' 视频<br>(此数据集无该路相机)</div></div>';
+    // v3.0：按 chunk/file 取拼接视频，#t=from,to 只播这一条的时间窗
+    var src = '/api/dataset/video?id=' + encodeURIComponent(state.id) + '&cam=' + cam +
+      '&chunk=' + loc.chunk + '&file=' + loc.file + '#t=' + loc.from + ',' + loc.to;
+    return '<div class="vwrap"><span class="vlbl">' + cam + ' · ' + (loc.to - loc.from).toFixed(1) + 's</span>' +
+      '<video muted playsinline preload="metadata" controls src="' + src + '" ' +
+      'onerror="this.style.display=\'none\';this.insertAdjacentHTML(\'afterend\',\'<div class=&quot;vph&quot;>视频读不到<br>(' + cam + ')</div>\')"></video></div>';
   }
   function renderEpisodes() {
     $('ep-grid').innerHTML = state.episodes.map(function (e) {
       var sel = state.sel[e.episode] ? ' sel' : '';
       return '<div class="ep ' + (e.verdict === 'bad' ? 'bad' : '') + sel + '" id="ep-' + e.episode + '">' +
-        '<div class="ep-vids">' + vid('top', e.episode) + vid('wrist', e.episode) + '</div>' +
+        '<div class="ep-vids">' + vid('top', e) + vid('wrist', e) + '</div>' +
         '<div class="ep-info">' +
           '<div class="ep-top"><span class="id">ep ' + e.episode + '</span>' +
             '<span class="verdict ' + (e.verdict === 'bad' ? 'bad' : 'ok') + '">' + (e.verdict === 'bad' ? '⚠ 废条' : '✅ 有效') + '</span></div>' +
