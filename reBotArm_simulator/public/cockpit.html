@@ -323,6 +323,7 @@
             <label class="switch-row"><input type="checkbox" id="ros-mirror"><span>镜像真实关节状态到网页（只读）</span></label>
             <label class="switch-row"><input type="checkbox" id="ros-control-enable"><span>允许网页向真实机械臂发控制（危险）</span></label>
             <label class="field-row" style="margin-bottom:11px"><span>运行模式（真机直连必须选「真实机械臂」）</span><select id="ros-mode"><option value="fake">仿真驱动 (fake)</option><option value="real">真实机械臂 (real)</option></select></label>
+            <label class="switch-row"><input type="checkbox" id="fake-backend"><span>仿真后端（演示·无真机：控制台空跑，指令直接驱动这台 3D 当假反馈）</span></label>
 
             <div class="liveband">
               <div class="h"><span class="i">!</span>真机操作区 · LIVE HARDWARE</div>
@@ -688,6 +689,43 @@ ros2 launch rosbridge_server rosbridge_websocket_launch.xml port:=9090 address:=
       btn.title = '实时跟随真机 · ' + txt;
     }
     setInterval(upd, 500); upd();
+  })();
+  </script>
+
+  <!-- [轻假驱动 · 纯叠加] 「仿真后端」开关：无真机时把指令回灌成假反馈，让控制台空跑可演示。
+       明确标「演示」、绝不 publish 到真 /cmd（本脚本只调 reBotSim，不碰 ROS publish）；真机连上自动让位。
+       删本 script + 删 #fake-backend 那行 switch-row 即回退。 -->
+  <script>
+  (function () {
+    var $ = function (id) { return document.getElementById(id); };
+    var fake = $('fake-backend'), st = $('ros-status'), fb = $('ros-feedback-error');
+    if (!fake) return;
+    var DEMO = '假驱动闭环 · 演示（无真机，指令即反馈）', WAIT = '等待 /joint_states';
+    var unsub = null;
+    function connected() { return st && /在线|已连接|connected|open/i.test(st.textContent || ''); }
+    function echo(cmd) { // 指令 → 延时回灌成「假反馈」(source:'ros' 不会再触发 onCommand，无环)
+      if (!fake.checked || connected() || !window.reBotSim || !cmd || cmd.type !== 'joint') return;
+      setTimeout(function () {
+        if (!fake.checked || connected() || !window.reBotSim) return;
+        try {
+          if (cmd.name === 'gripper' && window.reBotSim.setGripperWidth) window.reBotSim.setGripperWidth(cmd.value, { source: 'ros', animate: false });
+          else window.reBotSim.setAngles({ [cmd.name]: cmd.value }, { source: 'ros' });
+        } catch (e) {}
+      }, 60);
+    }
+    function start() {
+      if (unsub) return;
+      if (window.reBotSim && window.reBotSim.onCommand) { unsub = window.reBotSim.onCommand(echo); }
+      else { setTimeout(function () { if (fake.checked) start(); }, 300); } // 引擎未就绪稍后重试
+    }
+    function stop() { if (unsub) { unsub(); unsub = null; } }
+    fake.addEventListener('change', function () { if (fake.checked) start(); else stop(); });
+    setInterval(function () {
+      if (connected() && fake.checked) { fake.checked = false; stop(); }   // 真机连上=真机优先，自动让位
+      if (!fb) return;
+      if (fake.checked && !connected()) { if (fb.textContent !== DEMO) { fb.textContent = DEMO; fb.style.color = 'var(--info)'; } }
+      else if (!connected() && fb.textContent === DEMO) { fb.textContent = WAIT; fb.style.color = ''; }
+    }, 600);
   })();
   </script>
 </body>
