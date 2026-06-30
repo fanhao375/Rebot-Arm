@@ -315,6 +315,164 @@ function stopRecord() {
   return { ok: true, message: '已请求停止采集' };
 }
 
+// [Added by fanhao375 2026-06-30] 看数据站后端：列数据集 + parquet 质检 + 视频回放 + 删废条
+// 数据集落 ~/.cache/huggingface/lerobot/<owner>/<name>；视频 videos/observation.images.{top,wrist}/chunk-000/*.mp4。
+const LEROBOT_HOME = process.env.LEROBOT_HOME
+  || path.join(os.homedir(), '.cache', 'huggingface', 'lerobot');
+const QUALITY_SCRIPT = process.env.QUALITY_SCRIPT
+  || path.resolve(ROOT, '..', '..', 'tools', 'lerobot_native_linux', 'dataset_quality.py');
+const PYTHON_BIN = process.env.PYTHON_BIN || 'python3';
+
+// repo_id 来自前端 → 必须防路径穿越：只允许 owner/name 两段、字符受限、解析后须落在 LEROBOT_HOME 内。
+function safeDatasetPath(repoId) {
+  if (!repoId || !/^[\w.-]+\/[\w.-]+$/.test(repoId)) return null;
+  const p = path.resolve(path.join(LEROBOT_HOME, repoId));
+  const base = path.resolve(LEROBOT_HOME);
+  if (p !== base && !p.startsWith(base + path.sep)) return null;
+  return p;
+}
+function isDataset(dir) {
+  return fs.existsSync(path.join(dir, 'data')) || fs.existsSync(path.join(dir, 'meta'));
+}
+function countEpisodes(dir) {
+  try {
+    let n = 0;
+    const dataDir = path.join(dir, 'data');
+    const walk = (d) => {
+      fs.readdirSync(d, { withFileTypes: true }).forEach((e) => {
+        if (e.isDirectory()) walk(path.join(d, e.name));
+        else if (/\.parquet$/i.test(e.name)) n++;
+      });
+    };
+    if (fs.existsSync(dataDir)) walk(dataDir);
+    return n;
+  } catch (e) { return null; }
+}
+function listDatasets() {
+  if (!fs.existsSync(LEROBOT_HOME)) {
+    return { available: false, home: LEROBOT_HOME, note: '没有 ~/.cache/huggingface/lerobot —— 看数据要在采过数据的机器上跑本服务（采集机/训练机）。', datasets: [] };
+  }
+  const out = [];
+  try {
+    fs.readdirSync(LEROBOT_HOME, { withFileTypes: true }).filter((o) => o.isDirectory()).forEach((owner) => {
+      const ownerDir = path.join(LEROBOT_HOME, owner.name);
+      // 直接是数据集（无 owner 层）或 owner/name 两层
+      if (isDataset(ownerDir)) {
+        out.push({ repo_id: owner.name, episodes: countEpisodes(ownerDir), hasVideos: fs.existsSync(path.join(ownerDir, 'videos')) });
+        return;
+      }
+      try {
+        fs.readdirSync(ownerDir, { withFileTypes: true }).filter((o) => o.isDirectory()).forEach((name) => {
+          const dir = path.join(ownerDir, name.name);
+          if (isDataset(dir)) out.push({ repo_id: owner.name + '/' + name.name, episodes: countEpisodes(dir), hasVideos: fs.existsSync(path.join(dir, 'videos')) });
+        });
+      } catch (e) { /* skip */ }
+    });
+  } catch (e) {
+    return { available: false, home: LEROBOT_HOME, note: '读取失败: ' + e.message, datasets: [] };
+  }
+  return { available: true, home: LEROBOT_HOME, datasets: out.sort((a, b) => a.repo_id.localeCompare(b.repo_id)) };
+}
+
+function mockEpisodes() {
+  // 给无数据的机器联调前端：6 条，混入 2 条废条
+  const eps = [];
+  for (let i = 0; i < 6; i++) {
+    const bad = (i === 2 || i === 4);
+    eps.push({
+      episode: i, frames: bad ? (i === 2 ? 3 : 40) : 120 + i * 5,
+      leaderAmp: bad && i === 2 ? 1 : 60 + i, followerAmp: bad ? (i === 2 ? 1 : 12) : 58 + i,
+      verdict: bad ? 'bad' : 'ok',
+      reason: bad ? (i === 2 ? '主臂≈0°，空条（当时没动 102）' : '主臂动了、从臂没跟（601 当时没跟上）') : ''
+    });
+  }
+  return { ok: true, count: eps.length, episodes: eps, mock: true };
+}
+function datasetEpisodes(repoId, mock, cb) {
+  if (mock) return cb(mockEpisodes());
+  const dir = safeDatasetPath(repoId);
+  if (!dir) return cb({ ok: false, error: '非法数据集名（要 owner/name 形式）' });
+  if (!fs.existsSync(dir)) return cb({ ok: false, error: '数据集不存在：' + dir });
+  let out = '', err = '';
+  let proc;
+  try {
+    proc = spawn(PYTHON_BIN, [QUALITY_SCRIPT, dir]);
+  } catch (e) {
+    return cb({ ok: false, error: '起 python 失败（本机可能无 python3）：' + e.message });
+  }
+  const timer = setTimeout(() => { try { proc.kill(); } catch (e) {} cb({ ok: false, error: '质检超时（数据集太大或卡住）' }); }, 60000);
+  proc.stdout.on('data', (d) => { out += d; });
+  proc.stderr.on('data', (d) => { err += d; });
+  proc.on('error', (e) => { clearTimeout(timer); cb({ ok: false, error: '起 python 失败：' + e.message }); });
+  proc.on('close', () => {
+    clearTimeout(timer);
+    const line = out.trim().split(/\r?\n/).filter(Boolean).pop() || '';
+    try { cb(JSON.parse(line)); }
+    catch (e) { cb({ ok: false, error: '质检输出解析失败：' + (err.trim() || out.trim() || e.message).slice(0, 400) }); }
+  });
+}
+
+// 视频回放（带 HTTP Range，支持 <video> 拖动）。cam 白名单，ep 取整，路径须落在数据集内。
+function datasetVideoPath(repoId, cam, ep) {
+  const dir = safeDatasetPath(repoId);
+  if (!dir) return null;
+  if (cam !== 'top' && cam !== 'wrist') return null;
+  const epi = parseInt(ep, 10);
+  if (isNaN(epi) || epi < 0) return null;
+  const camDir = path.join(dir, 'videos', 'observation.images.' + cam, 'chunk-000');
+  const padded = String(epi).padStart(6, '0');
+  const direct = path.join(camDir, 'episode_' + padded + '.mp4');
+  if (fs.existsSync(direct)) return direct;
+  // 兜底：目录命名有出入时按 episode 号 glob 一下
+  try {
+    const hit = fs.readdirSync(camDir).find((n) => n.indexOf(padded) >= 0 && /\.mp4$/i.test(n));
+    if (hit) return path.join(camDir, hit);
+  } catch (e) { /* no dir */ }
+  return null;
+}
+function sendVideoFile(req, res, filePath) {
+  fs.stat(filePath, (err, stat) => {
+    if (err || !stat.isFile()) { sendJson(res, 404, { error: '视频不存在' }); return; }
+    const range = req.headers.range;
+    if (!range) {
+      res.writeHead(200, { 'Content-Type': 'video/mp4', 'Content-Length': stat.size, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store' });
+      fs.createReadStream(filePath).pipe(res); return;
+    }
+    const m = /bytes=(\d*)-(\d*)/.exec(range) || [];
+    let start = m[1] ? parseInt(m[1], 10) : 0;
+    let end = m[2] ? parseInt(m[2], 10) : stat.size - 1;
+    if (isNaN(start) || start < 0) start = 0;
+    if (isNaN(end) || end >= stat.size) end = stat.size - 1;
+    if (start > end) { res.writeHead(416, { 'Content-Range': 'bytes */' + stat.size }); res.end(); return; }
+    res.writeHead(206, { 'Content-Type': 'video/mp4', 'Content-Range': 'bytes ' + start + '-' + end + '/' + stat.size, 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1, 'Cache-Control': 'no-store' });
+    fs.createReadStream(filePath, { start, end }).pipe(res);
+  });
+}
+
+// 删废条：lerobot-edit-dataset delete_episodes（破坏性 → 过安全闸；注意默认重编码会转 AV1）。
+function deleteEpisodes(repoId, indices, cb) {
+  const dir = safeDatasetPath(repoId);
+  if (!dir) return cb({ ok: false, message: '非法数据集名' });
+  if (!fs.existsSync(dir)) return cb({ ok: false, message: '数据集不存在' });
+  const idx = String(indices || '').split(',').map((s) => parseInt(s, 10)).filter((n) => !isNaN(n) && n >= 0);
+  if (!idx.length) return cb({ ok: false, message: '没选要删的 episode' });
+  let out = '', err = '';
+  let proc;
+  try {
+    proc = spawn('lerobot-edit-dataset', [
+      '--repo_id=' + repoId,
+      '--operation.type=delete_episodes',
+      '--operation.episode_indices=[' + idx.join(',') + ']'
+    ], { env: Object.assign({}, process.env, { HF_HUB_OFFLINE: '1' }) });
+  } catch (e) {
+    return cb({ ok: false, message: '起 lerobot-edit-dataset 失败（需 lerobot 环境）：' + e.message });
+  }
+  proc.stdout.on('data', (d) => { out += d; });
+  proc.stderr.on('data', (d) => { err += d; });
+  proc.on('error', (e) => cb({ ok: false, message: '起删除工具失败：' + e.message }));
+  proc.on('close', (code) => cb({ ok: code === 0, message: code === 0 ? ('已删 ' + idx.length + ' 条（原数据自动备份为 <repo_id>_old，重建需耐心等编码）' ) : ('删除失败 code=' + code + '：' + (err.trim() || out.trim()).slice(0, 400)) }));
+}
+
 // [Added by fanhao375 2026-06-29] 遥操作控制端点安全闸：仅本机 + POST + 同源
 // 防止 LAN 设备或同机恶意网页(CSRF)用一个 GET/跨源请求远程启动真机运动。
 function isLoopback(req) {
@@ -439,6 +597,30 @@ function requestHandler(req, res) {
     if (!teleopGuard(req, res)) return;
     const r = stopRecord();
     sendJson(res, 200, Object.assign(r, { status: recordStatus() }));
+    return;
+  }
+
+  // [Added by fanhao375 2026-06-30] 看数据站：列数据集 / 质检 episode / 视频回放(range) / 删废条(过闸)
+  if (urlPath === '/api/datasets') {
+    sendJson(res, 200, listDatasets());
+    return;
+  }
+  if (urlPath === '/api/dataset/episodes') {
+    const q = new URL(req.url, 'http://x').searchParams;
+    datasetEpisodes(q.get('id'), q.get('mock') === '1', (result) => sendJson(res, 200, result));
+    return;
+  }
+  if (urlPath === '/api/dataset/video') {
+    const q = new URL(req.url, 'http://x').searchParams;
+    const fp = datasetVideoPath(q.get('id'), q.get('cam'), q.get('ep'));
+    if (!fp) { sendJson(res, 404, { error: '视频不存在或参数非法' }); return; }
+    sendVideoFile(req, res, fp);
+    return;
+  }
+  if (urlPath === '/api/dataset/delete') {
+    if (!teleopGuard(req, res)) return;
+    const q = new URL(req.url, 'http://x').searchParams;
+    deleteEpisodes(q.get('id'), q.get('episodes'), (result) => sendJson(res, 200, result));
     return;
   }
 

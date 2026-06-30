@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<!--
+  reBot 驾驶舱 · 看数据站 data.html
+  [Built by fanhao375 2026-06-30] 阶段3：列数据集 → parquet 质检(主臂/从臂幅度判废) → top/wrist 视频回放 → 选废条删除。
+  质检逻辑搬自 LeRobot_模仿学习全流程_小白教程.md；删条调 lerobot-edit-dataset。
+  回退：删 data.html + 删 server.js 的 /api/datasets|/api/dataset/* + listDatasets/datasetEpisodes 等。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>reBot 驾驶舱 · 看数据</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  :root{
+    --bg:#0A0D0C;--rail:rgba(7,11,9,.92);--chrome:rgba(8,12,10,.96);
+    --text:#fff;--text2:rgba(255,255,255,.6);--text3:rgba(255,255,255,.42);
+    --line:rgba(255,255,255,.08);--surface:rgba(255,255,255,.05);--surface-bd:rgba(255,255,255,.1);
+    --card:rgba(255,255,255,.04);--card-bd:rgba(255,255,255,.08);
+    --accent:#2DE08A;--accent-ink:#06241A;--accent-text:#3DF0A0;--accent-soft:rgba(45,224,138,.14);--accent-soft-bd:rgba(45,224,138,.32);
+    --warn:#FFB341;--info:#8FC0FF;--danger:#FF8A92;--blue:#5AA9FF;--purple:#B98AFF;
+  }
+  body{background:var(--bg);color:var(--text);font-family:'Space Grotesk','PingFang SC','Microsoft YaHei',system-ui,sans-serif;font-size:13px}
+  .mono{font-family:'IBM Plex Mono',monospace}
+  .app{min-height:100vh;display:flex}
+
+  .rail{width:64px;flex:none;background:var(--rail);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:4px;position:sticky;top:0;height:100vh}
+  .rail .logo{width:36px;height:36px;border-radius:11px;background:linear-gradient(145deg,#3DF0A0,#15A862);display:flex;align-items:center;justify-content:center;color:#062317;font-weight:700;font-size:12px;margin-bottom:6px}
+  .rail a,.rail button{font-family:inherit;cursor:pointer;width:40px;height:38px;border-radius:11px;border:none;background:transparent;color:var(--text3);font-size:14px;display:flex;align-items:center;justify-content:center;text-decoration:none}
+  .rail a.sm{font-size:11px;font-weight:600}
+  .rail a.active{border:1px solid var(--accent-soft-bd);background:var(--accent-soft);color:var(--accent-text);font-weight:600}
+  .rail a.locked{opacity:.55;cursor:default}
+  .rail .div{width:30px;height:1px;background:var(--line);margin:4px 0}
+
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;min-height:100vh}
+  .topbar{height:52px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 18px;background:var(--chrome);border-bottom:1px solid var(--line)}
+  .topbar .ttl{font-size:15px;font-weight:600}
+  .topbar .sub{font-size:11px;color:var(--text3);margin-left:10px}
+  .topbar .msg{font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace}
+
+  .body{flex:1;overflow-y:auto;padding:22px 26px}
+  .sec-h{font-size:13px;font-weight:600;margin:0 0 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .sec-h .tag{font-size:10px;color:var(--text3);font-family:'IBM Plex Mono',monospace}
+  .ck{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text2);cursor:pointer}
+  .ck input{width:15px;height:15px;accent-color:var(--accent)}
+
+  .ds-grid{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:20px}
+  .ds{border-radius:12px;background:var(--card);border:1px solid var(--card-bd);padding:12px 15px;cursor:pointer;min-width:200px}
+  .ds.active{border-color:var(--accent-soft-bd);background:var(--accent-soft)}
+  .ds .nm{font-size:13px;font-weight:600;font-family:'IBM Plex Mono',monospace}
+  .ds .meta{font-size:10.5px;color:var(--text3);margin-top:4px}
+
+  .toolbar{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+  .btn-del{padding:8px 14px;border:1px solid rgba(255,138,146,.4);border-radius:9px;background:rgba(255,138,146,.08);color:var(--danger);font-weight:600;font-size:12px;cursor:pointer;font-family:inherit}
+  .btn-ghost{padding:8px 12px;border:1px solid var(--surface-bd);border-radius:9px;background:var(--surface);color:var(--text2);font-size:12px;cursor:pointer;font-family:inherit}
+  .pill{font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace}
+
+  .ep-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+  .ep{border-radius:13px;background:var(--card);border:1px solid var(--card-bd);overflow:hidden}
+  .ep.bad{border-color:rgba(255,179,65,.45)}
+  .ep.sel{outline:2px solid var(--danger);outline-offset:-2px}
+  .ep-vids{display:grid;grid-template-columns:1fr 1fr;gap:2px;background:#000;aspect-ratio:2/0.75}
+  .ep-vids .vwrap{position:relative;background:#06100c;display:flex;align-items:center;justify-content:center;min-height:96px}
+  .ep-vids video{width:100%;height:100%;object-fit:cover;display:block}
+  .ep-vids .vph{font-size:10px;color:var(--text3);text-align:center;padding:6px}
+  .ep-vids .vlbl{position:absolute;top:5px;left:6px;font-size:9px;color:#fff;background:rgba(0,0,0,.5);padding:1px 6px;border-radius:5px;font-family:'IBM Plex Mono',monospace}
+  .ep-info{padding:11px 13px}
+  .ep-top{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+  .ep-top .id{font-size:13px;font-weight:600;font-family:'IBM Plex Mono',monospace}
+  .verdict{font-size:10px;font-weight:700;padding:2px 8px;border-radius:6px;margin-left:auto}
+  .verdict.ok{background:rgba(45,224,138,.16);color:var(--accent-text)}
+  .verdict.bad{background:rgba(255,179,65,.18);color:var(--warn)}
+  .ep-amps{display:flex;gap:14px;font-size:11px;color:var(--text2);font-family:'IBM Plex Mono',monospace}
+  .ep-amps b{color:var(--text)}
+  .ep-reason{font-size:10.5px;color:var(--warn);margin-top:6px;line-height:1.5}
+  .ep-sel{display:flex;align-items:center;gap:6px;margin-top:9px;font-size:11px;color:var(--text3);cursor:pointer}
+  .ep-sel input{width:15px;height:15px;accent-color:var(--danger)}
+
+  .empty{border-radius:14px;border:1px dashed var(--card-bd);background:var(--card);padding:22px;text-align:center;color:var(--text3);font-size:12.5px;line-height:1.7}
+  .empty code{font-family:'IBM Plex Mono',monospace;color:var(--accent-text);background:rgba(45,224,138,.08);padding:1px 5px;border-radius:4px}
+  .err{border-radius:12px;border:1px solid rgba(255,107,116,.35);background:rgba(40,8,10,.5);padding:14px 16px;color:#FFC9CD;font-size:12px;line-height:1.6}
+</style>
+</head>
+<body>
+  <div class="app">
+    <nav class="rail">
+      <div class="logo">rB</div>
+      <a class="sm" href="/cockpit.html" title="总览/驾驶舱">玩</a>
+      <div class="div"></div>
+      <a class="locked" title="装配（文档）">装</a>
+      <a class="locked" title="连接">连</a>
+      <a href="/cockpit.html" title="玩 · 驾驶舱">▦</a>
+      <a title="采数据" href="/record.html">采</a>
+      <a class="active" title="看数据" href="/data.html">看</a>
+      <a title="训练" href="/train.html">训</a>
+      <a class="locked" title="部署（待上线）">部</a>
+    </nav>
+
+    <div class="main">
+      <header class="topbar">
+        <div><span class="ttl">看数据 · Datasets</span><span class="sub">parquet 质检 + top/wrist 回放 + 删废条</span></div>
+        <div class="msg" id="host">—</div>
+      </header>
+
+      <div class="body">
+        <div class="sec-h">数据集 <span class="tag" id="home-tag">~/.cache/huggingface/lerobot</span>
+          <label class="ck" style="margin-left:auto"><input type="checkbox" id="mock"> 演示模式(无数据也能看流程)</label>
+          <button class="btn-ghost" id="reload">↻ 刷新</button>
+        </div>
+        <div class="ds-grid" id="ds-grid"><span class="pill">读取中…</span></div>
+
+        <div id="ep-zone" style="display:none">
+          <div class="sec-h">episode 质检 <span class="tag">主臂/从臂幅度 &gt;30° 判有效 · 否则废条</span></div>
+          <div class="toolbar">
+            <span class="pill" id="ep-summary">—</span>
+            <button class="btn-ghost" id="sel-bad">勾选所有废条</button>
+            <button class="btn-ghost" id="sel-none">取消勾选</button>
+            <button class="btn-del" id="del">🗑 删除选中(<span id="sel-n">0</span>)</button>
+            <span class="msg" id="del-msg"></span>
+          </div>
+          <div class="ep-grid" id="ep-grid"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var state = { id: null, mock: false, episodes: [], sel: {} };
+
+  fetch('/api/platform').then(function (r) { return r.json(); }).then(function (p) {
+    $('host').textContent = '后端：' + (p.label || p.host || '?');
+  }).catch(function () {});
+
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+  // ---- 数据集列表 ----
+  function loadDatasets() {
+    state.mock = $('mock').checked;
+    if (state.mock) {
+      $('home-tag').textContent = '演示模式（mock）';
+      $('ds-grid').innerHTML = '<div class="ds active" data-id="__mock__"><div class="nm">演示数据集</div><div class="meta">6 条 · 含 2 废条 · 视频为占位</div></div>';
+      bindDs(); openDataset('__mock__'); return;
+    }
+    $('ds-grid').innerHTML = '<span class="pill">读取中…</span>';
+    fetch('/api/datasets').then(function (r) { return r.json(); }).then(function (d) {
+      $('home-tag').textContent = d.home || '~/.cache/huggingface/lerobot';
+      if (!d.available || !d.datasets.length) {
+        $('ds-grid').innerHTML = '<div class="empty">' + (d.note ? esc(d.note) : '没有数据集。') +
+          '<br>采过数据后，数据集落在 <code>' + esc(d.home || '~/.cache/huggingface/lerobot') + '/&lt;owner&gt;/&lt;name&gt;</code>。<br>先去<b>采数据站</b>录几条，或勾上方<b>演示模式</b>看流程。</div>';
+        $('ep-zone').style.display = 'none'; return;
+      }
+      $('ds-grid').innerHTML = d.datasets.map(function (ds) {
+        return '<div class="ds" data-id="' + esc(ds.repo_id) + '"><div class="nm">' + esc(ds.repo_id) + '</div>' +
+          '<div class="meta">' + (ds.episodes != null ? ds.episodes + ' 条' : '? 条') + (ds.hasVideos ? ' · 有视频' : ' · 无视频') + '</div></div>';
+      }).join('');
+      bindDs();
+    }).catch(function (e) { $('ds-grid').innerHTML = '<div class="err">连不上 /api/datasets：' + esc(e.message) + '</div>'; });
+  }
+  function bindDs() {
+    Array.prototype.forEach.call(document.querySelectorAll('.ds'), function (el) {
+      el.onclick = function () {
+        Array.prototype.forEach.call(document.querySelectorAll('.ds'), function (x) { x.classList.remove('active'); });
+        el.classList.add('active'); openDataset(el.getAttribute('data-id'));
+      };
+    });
+  }
+
+  // ---- episode 质检网格 ----
+  function openDataset(id) {
+    state.id = id; state.sel = {};
+    $('ep-zone').style.display = 'block';
+    $('ep-grid').innerHTML = '<span class="pill">质检中（读 parquet，稍候）…</span>';
+    $('ep-summary').textContent = '—'; $('del-msg').textContent = '';
+    var url = '/api/dataset/episodes?id=' + encodeURIComponent(id) + (state.mock ? '&mock=1' : '');
+    fetch(url).then(function (r) { return r.json(); }).then(function (res) {
+      if (!res.ok) { $('ep-grid').innerHTML = '<div class="err">质检失败：' + esc(res.error || '未知') + '</div>'; $('ep-summary').textContent = '—'; return; }
+      state.episodes = res.episodes || [];
+      var bad = state.episodes.filter(function (e) { return e.verdict === 'bad'; }).length;
+      $('ep-summary').textContent = '共 ' + state.episodes.length + ' 条，有效 ' + (state.episodes.length - bad) + ' · 废条 ' + bad + (res.mock ? ' （演示）' : '');
+      renderEpisodes();
+    }).catch(function (e) { $('ep-grid').innerHTML = '<div class="err">连不上 /api/dataset/episodes：' + esc(e.message) + '</div>'; });
+  }
+  function vid(cam, ep) {
+    if (state.mock) return '<div class="vwrap"><span class="vlbl">' + cam + '</span><div class="vph">演示模式<br>无视频</div></div>';
+    var src = '/api/dataset/video?id=' + encodeURIComponent(state.id) + '&cam=' + cam + '&ep=' + ep;
+    return '<div class="vwrap"><span class="vlbl">' + cam + '</span>' +
+      '<video muted loop playsinline preload="metadata" controls src="' + src + '" ' +
+      'onerror="this.style.display=\'none\';this.insertAdjacentHTML(\'afterend\',\'<div class=&quot;vph&quot;>无此视频<br>(' + cam + ')</div>\')"></video></div>';
+  }
+  function renderEpisodes() {
+    $('ep-grid').innerHTML = state.episodes.map(function (e) {
+      var sel = state.sel[e.episode] ? ' sel' : '';
+      return '<div class="ep ' + (e.verdict === 'bad' ? 'bad' : '') + sel + '" id="ep-' + e.episode + '">' +
+        '<div class="ep-vids">' + vid('top', e.episode) + vid('wrist', e.episode) + '</div>' +
+        '<div class="ep-info">' +
+          '<div class="ep-top"><span class="id">ep ' + e.episode + '</span>' +
+            '<span class="verdict ' + (e.verdict === 'bad' ? 'bad' : 'ok') + '">' + (e.verdict === 'bad' ? '⚠ 废条' : '✅ 有效') + '</span></div>' +
+          '<div class="ep-amps"><span>主臂 <b>' + e.leaderAmp + '°</b></span><span>从臂 <b>' + e.followerAmp + '°</b></span><span>' + e.frames + ' 帧</span></div>' +
+          (e.reason ? '<div class="ep-reason">' + esc(e.reason) + '</div>' : '') +
+          '<label class="ep-sel"><input type="checkbox" data-ep="' + e.episode + '" ' + (state.sel[e.episode] ? 'checked' : '') + '> 选中删除</label>' +
+        '</div></div>';
+    }).join('');
+    Array.prototype.forEach.call(document.querySelectorAll('.ep-sel input'), function (cb) {
+      cb.onchange = function () {
+        var ep = parseInt(cb.getAttribute('data-ep'), 10);
+        if (cb.checked) state.sel[ep] = true; else delete state.sel[ep];
+        $('ep-' + ep).classList.toggle('sel', cb.checked);
+        updateSelN();
+      };
+    });
+    updateSelN();
+  }
+  function updateSelN() { $('sel-n').textContent = Object.keys(state.sel).length; }
+
+  $('sel-bad').onclick = function () {
+    state.episodes.forEach(function (e) { if (e.verdict === 'bad') state.sel[e.episode] = true; });
+    renderEpisodes();
+  };
+  $('sel-none').onclick = function () { state.sel = {}; renderEpisodes(); };
+
+  $('del').onclick = function () {
+    var ids = Object.keys(state.sel);
+    if (!ids.length) { $('del-msg').textContent = '没选要删的'; return; }
+    if (state.mock) { $('del-msg').textContent = '演示模式不真删'; return; }
+    if (!confirm('要删除 episode [' + ids.join(',') + ']？\n注意：lerobot-edit-dataset 默认会重编码并可能转 AV1（训练机或解不动）；原数据会自动备份成 <repo_id>_old。确认删除？')) return;
+    $('del-msg').textContent = '删除中（要重建数据集，耐心等编码，别中途刷新）…';
+    fetch('/api/dataset/delete?id=' + encodeURIComponent(state.id) + '&episodes=' + ids.join(','), { method: 'POST' })
+      .then(function (r) { return r.json(); }).then(function (res) {
+        $('del-msg').textContent = (res.ok ? '✔ ' : '✖ ') + (res.message || '');
+        if (res.ok) { state.sel = {}; openDataset(state.id); }
+      }).catch(function (e) { $('del-msg').textContent = '✖ 删除失败：' + e.message; });
+  };
+
+  $('mock').onchange = loadDatasets;
+  $('reload').onclick = loadDatasets;
+  loadDatasets();
+})();
+</script>
+</body>
+</html>
