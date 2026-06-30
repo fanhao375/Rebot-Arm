@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<!--
+  reBot 驾驶舱 · 采数据站 record.html
+  [Built by fanhao375 2026-06-30] 阶段2：一键起 lerobot-record（B601-DM 从臂 + Arm102 leader 遥操，双相机）。
+  扫串口/相机 → 选主从+俯视/腕部 → 任务/条数/时长 → 起采集；实时显示第 N/M 条 + 录制/编码相位。
+  6 个踩坑做成内联提示（来自 采数据_lerobot_record.md）。真臂会动 = 危险态框架。
+  回退：删 record.html + 删 server.js 的 /api/record/* 与 /api/cameras + listCameras/startRecord 等。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>reBot 驾驶舱 · 采数据</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  :root{
+    --bg:#0A0D0C;--rail:rgba(7,11,9,.92);--chrome:rgba(8,12,10,.96);
+    --text:#fff;--text2:rgba(255,255,255,.6);--text3:rgba(255,255,255,.42);
+    --line:rgba(255,255,255,.08);--surface:rgba(255,255,255,.05);--surface-bd:rgba(255,255,255,.1);
+    --card:rgba(255,255,255,.04);--card-bd:rgba(255,255,255,.08);
+    --accent:#2DE08A;--accent-ink:#06241A;--accent-text:#3DF0A0;--accent-soft:rgba(45,224,138,.14);--accent-soft-bd:rgba(45,224,138,.32);
+    --warn:#FFB341;--info:#8FC0FF;--danger:#FF8A92;--blue:#5AA9FF;--purple:#B98AFF;
+  }
+  body{background:var(--bg);color:var(--text);font-family:'Space Grotesk','PingFang SC','Microsoft YaHei',system-ui,sans-serif;font-size:13px}
+  .mono{font-family:'IBM Plex Mono',monospace}
+  .app{min-height:100vh;display:flex}
+
+  .rail{width:64px;flex:none;background:var(--rail);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:4px;position:sticky;top:0;height:100vh}
+  .rail .logo{width:36px;height:36px;border-radius:11px;background:linear-gradient(145deg,#3DF0A0,#15A862);display:flex;align-items:center;justify-content:center;color:#062317;font-weight:700;font-size:12px;margin-bottom:6px}
+  .rail a,.rail button{font-family:inherit;cursor:pointer;width:40px;height:38px;border-radius:11px;border:none;background:transparent;color:var(--text3);font-size:14px;display:flex;align-items:center;justify-content:center;text-decoration:none}
+  .rail a.sm{font-size:11px;font-weight:600}
+  .rail a.active{border:1px solid var(--accent-soft-bd);background:var(--accent-soft);color:var(--accent-text);font-weight:600}
+  .rail a.locked{opacity:.55;cursor:default}
+  .rail .div{width:30px;height:1px;background:var(--line);margin:4px 0}
+
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;min-height:100vh}
+  .topbar{height:52px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 18px;background:var(--chrome);border-bottom:1px solid var(--line)}
+  .topbar .ttl{font-size:15px;font-weight:600}
+  .topbar .sub{font-size:11px;color:var(--text3);margin-left:10px}
+
+  .body{flex:1;overflow-y:auto;padding:22px 26px;max-width:1100px}
+  .sec-h{font-size:13px;font-weight:600;margin:0 0 12px;display:flex;align-items:center;justify-content:space-between}
+  .sec-h .tag{font-size:10px;color:var(--text3);font-family:'IBM Plex Mono',monospace}
+
+  .danger-bar{border-radius:12px;border:1px solid rgba(255,138,146,.4);background:rgba(40,8,10,.4);padding:12px 16px;margin-bottom:18px;font-size:12px;color:#FFC9CD;line-height:1.6}
+  .danger-bar b{color:#fff}
+
+  .card{border-radius:14px;background:var(--card);border:1px solid var(--card-bd);padding:16px 18px;margin-bottom:14px}
+  .form{display:flex;flex-wrap:wrap;gap:12px}
+  .form label{display:flex;flex-direction:column;gap:5px;font-size:10.5px;color:var(--text3)}
+  .form input,.form select{padding:8px 10px;border:1px solid var(--card-bd);border-radius:9px;background:rgba(255,255,255,.04);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:12px;min-width:130px}
+  .form input.wide{min-width:300px}
+  .form input.mid{min-width:210px}
+  .form label.ck{flex-direction:row;align-items:center;gap:7px;font-size:11.5px;color:var(--text2);align-self:flex-end}
+  .form label.ck input{min-width:0;width:16px;height:16px;accent-color:var(--accent)}
+  .btn-row{display:flex;gap:8px;margin:14px 0 0;align-items:center}
+  .btn-go{padding:9px 18px;border:none;border-radius:9px;background:var(--accent);color:var(--accent-ink);font-weight:700;font-size:13px;cursor:pointer;font-family:inherit}
+  .btn-stop{padding:9px 16px;border:1px solid rgba(255,138,146,.4);border-radius:9px;background:rgba(255,138,146,.08);color:var(--danger);font-weight:600;font-size:13px;cursor:pointer;font-family:inherit}
+  .btn-ghost{padding:8px 14px;border:1px solid var(--surface-bd);border-radius:9px;background:var(--surface);color:var(--text2);font-size:12px;cursor:pointer;font-family:inherit}
+  .msg{font-size:11px;color:var(--text3);margin-left:6px;font-family:'IBM Plex Mono',monospace}
+
+  .status{display:flex;gap:26px;align-items:center;flex-wrap:wrap}
+  .st-row{display:flex;flex-direction:column;gap:3px}
+  .st-row span{font-size:10px;color:var(--text3)}
+  .st-row b{font-size:15px}
+  .phase{padding:3px 10px;border-radius:7px;font-size:11px;font-weight:600}
+  .phase.rec{background:rgba(45,224,138,.16);color:var(--accent-text)}
+  .phase.enc{background:rgba(255,179,65,.16);color:var(--warn)}
+  .phase.idle{background:var(--surface);color:var(--text3)}
+  .prog{flex:1;min-width:180px;height:8px;border-radius:99px;background:rgba(255,255,255,.08);overflow:hidden}
+  .prog>i{display:block;height:100%;width:0;background:var(--accent);border-radius:99px;transition:width .4s}
+  .keys{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+  .key{font-size:11px;color:var(--text2);background:var(--surface);border:1px solid var(--surface-bd);border-radius:8px;padding:6px 10px}
+  .key b{font-family:'IBM Plex Mono',monospace;color:var(--accent-text)}
+  .log{margin-top:12px;max-height:120px;overflow-y:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text2);line-height:1.7;background:rgba(0,0,0,.25);border-radius:9px;padding:10px 12px;white-space:pre-wrap;word-break:break-all}
+
+  .pit-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .pit{border-radius:12px;background:var(--card);border:1px solid var(--card-bd);padding:13px 15px}
+  .pit .h{font-size:12px;font-weight:600;margin-bottom:5px;display:flex;align-items:center;gap:7px}
+  .pit .n{font-size:9.5px;padding:1px 7px;border-radius:5px;background:rgba(255,179,65,.16);color:var(--warn);font-weight:700}
+  .pit p{margin:0;font-size:11px;color:var(--text3);line-height:1.6}
+  .pit code{font-family:'IBM Plex Mono',monospace;color:var(--accent-text);background:rgba(45,224,138,.08);padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+  <div class="app">
+    <nav class="rail">
+      <div class="logo">rB</div>
+      <a class="sm" href="/cockpit.html" title="总览/驾驶舱">玩</a>
+      <div class="div"></div>
+      <a class="locked" title="装配（文档）">装</a>
+      <a class="locked" title="连接">连</a>
+      <a href="/cockpit.html" title="玩 · 驾驶舱">▦</a>
+      <a class="active" title="采数据" href="/record.html">采</a>
+      <a class="locked" title="看数据（待上线）">看</a>
+      <a title="训练" href="/train.html">训</a>
+      <a class="locked" title="部署（待上线）">部</a>
+    </nav>
+
+    <div class="main">
+      <header class="topbar">
+        <div><span class="ttl">采数据 · Record</span><span class="sub">lerobot-record · 102 主动 → 601 跟随 · 双相机</span></div>
+        <div class="msg" id="host">—</div>
+      </header>
+
+      <div class="body">
+        <div class="danger-bar">⚠ <b>真臂会动。</b>起采集后 102 主动臂带动 601 跟随，人站旁边、手放急停/断电旁。屏幕上的「停止」是软停，<b>不是硬件急停</b>。本站要在<b>接臂+双相机的机器人机（原生 Linux）</b>上跑本服务才有效。</div>
+
+        <div class="sec-h">1 · 接口（串口 + 相机） <span class="tag">点「扫描」自动填 · 也可手填路径</span></div>
+        <div class="card">
+          <div class="form">
+            <label>主动臂 leader 串口<input id="r-leader" class="mid" list="dl-ports" value="/dev/ttyUSB0"></label>
+            <label>从臂 follower 串口<input id="r-follower" class="mid" list="dl-ports" value="/dev/ttyACM0"></label>
+            <label>俯视相机 top<input id="r-top" class="wide" list="dl-cams" value="/dev/v4l/by-id/usb-Insta360_Insta360_Link_2-video-index0"></label>
+            <label>腕部相机 wrist<input id="r-wrist" class="wide" list="dl-cams" value="/dev/v4l/by-path/pci-0000:00:14.0-usb-0:8.2:1.4-video-index0"></label>
+          </div>
+          <datalist id="dl-ports"></datalist>
+          <datalist id="dl-cams"></datalist>
+          <div class="btn-row"><button id="r-scan" class="btn-ghost">↻ 扫描串口/相机</button><span class="msg" id="scan-msg"></span></div>
+        </div>
+
+        <div class="sec-h" style="margin-top:8px">2 · 任务 <span class="tag" id="r-tag">空闲</span></div>
+        <div class="card">
+          <div class="form">
+            <label>数据集 repo_id<input id="r-dataset" class="mid" type="text" value="fanhao375/demo_pick"></label>
+            <label>任务描述 single_task<input id="r-task" class="wide" type="text" value="pick the block and put it in the box"></label>
+            <label>目标条数 episodes<input id="r-episodes" type="number" value="10" min="1"></label>
+            <label>单条时长 s<input id="r-etime" type="number" value="30" min="2"></label>
+            <label>复位时长 s<input id="r-rtime" type="number" value="10" min="0"></label>
+            <label class="ck"><input id="r-resume" type="checkbox"> 续录(在现有数据集加条)</label>
+            <label class="ck"><input id="r-mock" type="checkbox" checked> 演示模式(mock,不接硬件)</label>
+          </div>
+          <div class="btn-row">
+            <button id="r-start" class="btn-go">▶ 开始采集</button>
+            <button id="r-stop" class="btn-stop" disabled style="opacity:.5">■ 停止收尾(ESC)</button>
+            <span class="msg" id="r-msg"></span>
+          </div>
+        </div>
+
+        <div class="sec-h" style="margin-top:8px">3 · 进度 <span class="tag">601 跟手=正在录 · 601 卡住=在编码(正常)</span></div>
+        <div class="card">
+          <div class="status">
+            <div class="st-row"><span>状态</span><b id="r-st">空闲</b></div>
+            <div class="st-row"><span>相位</span><span class="phase idle" id="r-phase">—</span></div>
+            <div class="st-row"><span>已录</span><b id="r-count" class="mono">— / —</b></div>
+            <div class="prog"><i id="r-prog"></i></div>
+          </div>
+          <div class="keys">
+            <span class="key"><b>→</b> 提前结束本条(任务做完就按，缩短编码冻结)</span>
+            <span class="key"><b>←</b> 重录本条</span>
+            <span class="key"><b>ESC</b> 停止收尾</span>
+          </div>
+          <div class="log" id="r-log">还没有日志。勾「演示模式」点开始采集，可在无硬件时把整条链路跑通。</div>
+        </div>
+
+        <div class="sec-h" style="margin-top:8px">踩坑提示（已写进脚本，给你心里有数） <span class="tag">来自 采数据_lerobot_record.md</span></div>
+        <div class="pit-grid">
+          <div class="pit"><div class="h">① 首帧超时 <span class="n">warmup</span></div><p>Insta360 首帧要 ~2.7s，默认 1s 会 <code>Timed out waiting for frame</code>。脚本已给 top <code>warmup_s:6</code>、wrist <code>:3</code>。</p></div>
+          <div class="pit"><div class="h">② 双相机抢带宽 <span class="n">MJPG</span></div><p>同条 USB2.0 总线，YUYV 会抢爆带宽卡死。脚本已给两台 <code>fourcc:MJPG</code> → 稳 30fps。</p></div>
+          <div class="pit"><div class="h">③ 别开实时显示 <span class="n">no display_data</span></div><p><code>--display_data=true</code> 每帧大图写盘拖垮控制环 → ~14fps。脚本不开它 + <code>num_image_writer_processes=2</code> → ~25fps。</p></div>
+          <div class="pit"><div class="h">④ 必须 video=true <span class="n">坑王</span></div><p><code>--dataset.video=false</code> 这版含义是「剔除所有图像特征」<b>不是存 PNG</b>！要画面靠默认 <code>video=true</code>，脚本绝不传 false。</p></div>
+          <div class="pit"><div class="h">⑤ batch_size=1 <span class="n">默认</span></div><p><code>video_encoding_batch_size&gt;1</code> 这版结尾会崩 <code>NoneType</code>。保持默认 1。</p></div>
+          <div class="pit"><div class="h">⑥ 编码冻结无法消除 <span class="n">只能缩短</span></div><p>每条录完同步刷盘+编码，期间主线程占住、<b>601 不动是正常的</b>。任务 10-15 秒做完立刻按 <code>→</code> 帧少冻结短。</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+
+  // 平台提示
+  fetch('/api/platform').then(function (r) { return r.json(); }).then(function (p) {
+    $('host').textContent = '后端：' + (p.label || p.host || '?') + (p.host === 'linux' ? ' ✓ 可采集' : ' ⚠ 采集需原生 Linux 机器人机');
+  }).catch(function () {});
+
+  // 扫串口 + 相机 → 填 datalist
+  function fillDL(id, items) {
+    var dl = $(id); dl.innerHTML = '';
+    (items || []).forEach(function (v) { var o = document.createElement('option'); o.value = v; dl.appendChild(o); });
+    return (items || []).length;
+  }
+  $('r-scan').onclick = function () {
+    $('scan-msg').textContent = '扫描中…';
+    Promise.all([
+      fetch('/api/teleop/ports').then(function (r) { return r.json(); }).catch(function () { return { ports: [] }; }),
+      fetch('/api/cameras').then(function (r) { return r.json(); }).catch(function () { return { byId: [], byPath: [] }; })
+    ]).then(function (res) {
+      var nP = fillDL('dl-ports', res[0].ports);
+      var cams = (res[1].byId || []).concat(res[1].byPath || []);
+      var nC = fillDL('dl-cams', cams);
+      var note = (res[1] && res[1].note) ? '（' + res[1].note + '）' : '';
+      $('scan-msg').textContent = '串口 ' + nP + ' 个 · 相机 ' + nC + ' 个' + note;
+    });
+  };
+
+  // 采集起/停 + 状态轮询
+  function setTag(state, running) {
+    $('r-tag').textContent = state; $('r-st').textContent = state;
+    $('r-start').disabled = running; $('r-start').style.opacity = running ? '.5' : '1';
+    $('r-stop').disabled = !running; $('r-stop').style.opacity = running ? '1' : '.5';
+  }
+  function renderRecord(s) {
+    if (!s) return;
+    var running = !!s.running;
+    setTag(running ? '采集中' : (s.job ? '已结束' : '空闲'), running);
+    var ph = $('r-phase');
+    if (!running) { ph.className = 'phase idle'; ph.textContent = '—'; }
+    else if (s.phase === 'encoding') { ph.className = 'phase enc'; ph.textContent = '编码冻结(601 卡住=正常)'; }
+    else { ph.className = 'phase rec'; ph.textContent = '录制中(601 跟手做任务)'; }
+    var done = (s.episode != null) ? (s.episode + (running ? 0 : 1)) : 0; // episode 0 起；跑完算 +1
+    var total = s.total || (parseInt($('r-episodes').value, 10) || 0);
+    $('r-count').textContent = (s.episode != null ? (s.episode + 1) : '—') + ' / ' + (total || '—');
+    $('r-prog').style.width = (total ? Math.min(100, (s.episode != null ? (s.episode + 1) : 0) / total * 100) : 0) + '%';
+    if (s.log && s.log.length) { $('r-log').textContent = s.log.join('\n'); $('r-log').scrollTop = $('r-log').scrollHeight; }
+  }
+  var rTimer = null;
+  function pollRecord() {
+    fetch('/api/record/status').then(function (r) { return r.json(); }).then(function (s) {
+      renderRecord(s);
+      if (!s.running && rTimer) { clearInterval(rTimer); rTimer = null; }
+    }).catch(function () {});
+  }
+  function startPoll() { if (!rTimer) { pollRecord(); rTimer = setInterval(pollRecord, 1000); } }
+
+  $('r-start').onclick = function () {
+    if (!$('r-mock').checked && !confirm('真臂将开始运动（102 带动 601）。确认人已站旁、手放急停旁？')) return;
+    var qs = 'dataset=' + encodeURIComponent($('r-dataset').value.trim()) +
+      '&task=' + encodeURIComponent($('r-task').value.trim()) +
+      '&episodes=' + encodeURIComponent(parseInt($('r-episodes').value, 10) || 0) +
+      '&episodeTime=' + encodeURIComponent(parseInt($('r-etime').value, 10) || 0) +
+      '&resetTime=' + encodeURIComponent(parseInt($('r-rtime').value, 10) || 0) +
+      '&leader=' + encodeURIComponent($('r-leader').value.trim()) +
+      '&follower=' + encodeURIComponent($('r-follower').value.trim()) +
+      '&top=' + encodeURIComponent($('r-top').value.trim()) +
+      '&wrist=' + encodeURIComponent($('r-wrist').value.trim()) +
+      ($('r-resume').checked ? '&resume=1' : '') +
+      ($('r-mock').checked ? '&mock=1' : '');
+    $('r-msg').textContent = '正在启动…';
+    fetch('/api/record/start?' + qs, { method: 'POST' }).then(function (r) { return r.json(); }).then(function (res) {
+      $('r-msg').textContent = (res.ok ? '✔ ' : '✖ ') + (res.message || '');
+      if (res.ok) startPoll();
+    }).catch(function (e) { $('r-msg').textContent = '✖ 启动失败：' + e.message; });
+  };
+  $('r-stop').onclick = function () {
+    $('r-msg').textContent = '正在停止收尾…';
+    fetch('/api/record/stop', { method: 'POST' }).then(function (r) { return r.json(); }).then(function (res) {
+      $('r-msg').textContent = (res.ok ? '✔ ' : '✖ ') + (res.message || '');
+    }).catch(function (e) { $('r-msg').textContent = '✖ 停止失败：' + e.message; });
+  };
+
+  // 进页面先拉一次：若已在采集（刷新/重连）接管轮询
+  fetch('/api/record/status').then(function (r) { return r.json(); }).then(function (s) {
+    renderRecord(s); if (s.running) startPoll();
+  }).catch(function () {});
+})();
+</script>
+</body>
+</html>

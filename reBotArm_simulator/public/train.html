@@ -92,6 +92,7 @@
   .chart{position:relative;border-radius:14px;background:var(--card);border:1px solid var(--card-bd);padding:10px;height:220px;margin-bottom:14px}
   .chart svg{width:100%;height:200px;display:block}
   .chart-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--text3);text-align:center;padding:0 20px}
+  .tlog{max-height:160px;overflow-y:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text2);line-height:1.7;background:rgba(0,0,0,.25);border-radius:11px;padding:12px 14px;white-space:pre-wrap;word-break:break-all;border:1px solid var(--card-bd)}
 </style>
 </head>
 <body>
@@ -103,7 +104,7 @@
       <a class="locked" title="装配（文档）">装</a>
       <a class="locked" title="连接">连</a>
       <a href="/cockpit.html" title="玩 · 驾驶舱">▦</a>
-      <a class="locked" title="采数据（待上线）">采</a>
+      <a title="采数据" href="/record.html">采</a>
       <a class="locked" title="看数据（待上线）">看</a>
       <a class="active" title="训练" href="/train.html">训</a>
       <a class="locked" title="部署（待上线）">部</a>
@@ -154,6 +155,9 @@
           <div class="chart-empty" id="loss-empty">还没有数据点 —— 点「开始训练」（先勾「演示模式」可在无 GPU 时看曲线跑通）</div>
         </div>
 
+        <div class="sec-h" style="margin-top:14px">训练日志 <span class="tag">真训练起不来时，错在这里看（conda/lerobot 报错都会显）</span></div>
+        <div class="tlog" id="t-log">还没有日志。</div>
+
         <div class="sec-h" style="margin-top:14px">采样回放 <span class="tag">下一步 · 依赖部署站 eval</span></div>
         <div class="ph">
           <div class="h">🎬 采样回放 <span class="soon">待接</span></div>
@@ -161,8 +165,8 @@
         </div>
 
         <div class="ph" style="border-style:solid;border-color:var(--card-bd);margin-top:8px">
-          <div class="h" style="color:var(--text2)">🧭 说明</div>
-          <p>真训练要跑在<b>有 GPU 的那台机</b>(WSL 5060Ti 上的 LeRobot)：在那台起 <code>node server.js</code>、本页面指向它即可。本机无 GPU 时勾<b>演示模式</b>能把表单→起任务→解析 loss→画曲线整条链路跑通验证。续训/checkpoint 落在 <code>outputs/train/web_run/checkpoints/</code>。</p>
+          <div class="h" style="color:var(--text2)">🧭 说明（重要：开始/停止只能本机点）</div>
+          <p>真训练要跑在<b>有 GPU 的那台机</b>(WSL 5060Ti 上的 LeRobot)：在那台起 <code>node server.js</code>。<b>「开始/停止训练」出于安全只放行本机(127.0.0.1)</b>——必须在那台 GPU 机自己的浏览器上点；从别的机器远程打开本页<b>只能看</b> GPU/loss，点开始会被拒(403)。本机无 GPU 时勾<b>演示模式</b>能把表单→起任务→解析 loss→画曲线整条链路跑通验证。续训：在那台用 <code>OUTPUT_DIR=旧目录 RESUME=1</code> 起脚本；checkpoint 落在 <code>outputs/train/web_run_*/checkpoints/</code>。</p>
         </div>
       </div>
     </div>
@@ -261,10 +265,13 @@
     setTag(running ? '训练中' : (s.job ? '已结束' : '空闲'), running);
     $('t-step').textContent = (s.step != null ? s.step : '—');
     $('t-loss').textContent = (s.loss != null ? Number(s.loss).toFixed(4) : '—');
-    var total = (s.job && s.job.steps) || ($('t-steps').value | 0);
+    var total = (s.job && s.job.steps) || (parseInt($('t-steps').value, 10) || 0);
     var p = (s.step != null && total) ? Math.min(100, s.step / total * 100) : 0;
     $('t-prog').style.width = p + '%';
     drawLoss(s.series, total);
+    // M1：渲染日志——真训练 conda/lerobot 报错都在这显，避免"已结束、无曲线、零报错"的黑箱
+    if (s.log && s.log.length) { $('t-log').textContent = s.log.join('\n'); $('t-log').scrollTop = $('t-log').scrollHeight; }
+    else if (!s.job) { $('t-log').textContent = '还没有日志。'; }
   }
 
   var trainTimer = null;
@@ -279,14 +286,16 @@
   $('t-start').onclick = function () {
     var qs = 'dataset=' + encodeURIComponent($('t-dataset').value.trim()) +
       '&policy=' + encodeURIComponent($('t-policy').value) +
-      '&steps=' + encodeURIComponent($('t-steps').value | 0) +
-      '&batch=' + encodeURIComponent($('t-batch').value | 0) +
+      '&steps=' + encodeURIComponent(parseInt($('t-steps').value, 10) || 0) +
+      '&batch=' + encodeURIComponent(parseInt($('t-batch').value, 10) || 0) +
       ($('t-mock').checked ? '&mock=1' : '');
+    $('t-start').disabled = true; $('t-start').style.opacity = '.5'; // 立即禁用，避免连点
     $('t-msg').textContent = '正在启动…';
+    function reenable() { $('t-start').disabled = false; $('t-start').style.opacity = '1'; }
     fetch('/api/train/start?' + qs, { method: 'POST' }).then(function (r) { return r.json(); }).then(function (res) {
       $('t-msg').textContent = (res.ok ? '✔ ' : '✖ ') + (res.message || '');
-      if (res.ok) startTrainPoll();
-    }).catch(function (e) { $('t-msg').textContent = '✖ 启动失败：' + e.message; });
+      if (res.ok) startTrainPoll(); else reenable(); // 失败要解禁，否则按钮卡死
+    }).catch(function (e) { $('t-msg').textContent = '✖ 启动失败：' + e.message; reenable(); });
   };
   $('t-stop').onclick = function () {
     $('t-msg').textContent = '正在停止…';

@@ -160,19 +160,36 @@ function parseBig(str) {
   const mult = { k: 1e3, m: 1e6, g: 1e9, t: 1e12 }[(m[2] || '').toLowerCase()] || 1;
   return parseFloat(m[1]) * mult;
 }
-function pushTrainLog(chunk) {
-  String(chunk).split(/\r?\n/).forEach((line) => {
-    if (!line.trim()) return;
-    trainLog.push(line);
-    const sm = line.match(/step[:\s=]+([0-9]*\.?[0-9]+[kKmMgGtT]?)/i);
-    const lm = line.match(/loss[:\s=]+([0-9]*\.?[0-9]+(?:e[-+]?\d+)?)/i);
-    if (sm && lm) {
-      const step = Math.round(parseBig(sm[1]));
-      const loss = parseFloat(lm[1]);
-      if (!isNaN(step) && !isNaN(loss)) trainSeries.push({ step, loss });
-      if (trainSeries.length > 5000) trainSeries = trainSeries.slice(-5000);
+// [M4 修复] 把 stdout/stderr 的 chunk 按行缓冲：跨 chunk 的半行（如 "step:20K lo" | "ss:0.063"）拼好再交给 onLine，
+// 避免真实 lerobot 高频日志在 chunk 边界被切断而丢点。返回的处理器带 flush()，进程退出时冲掉残行。
+function streamLines(onLine) {
+  let buf = '';
+  const handler = function (chunk) {
+    buf += String(chunk);
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      let line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      if (line.endsWith('\r')) line = line.slice(0, -1);
+      if (line.trim()) onLine(line);
     }
-  });
+  };
+  handler.flush = function () { if (buf.trim()) onLine(buf.trim()); buf = ''; };
+  return handler;
+}
+// 单行记录（手动消息 + streamLines 喂来的整行都走这里）。
+function pushTrainLog(line) {
+  line = String(line);
+  if (!line.trim()) return;
+  trainLog.push(line);
+  const sm = line.match(/step[:\s=]+([0-9]*\.?[0-9]+[kKmMgGtT]?)/i);
+  const lm = line.match(/loss[:\s=]+([0-9]*\.?[0-9]+(?:e[-+]?\d+)?)/i);
+  if (sm && lm) {
+    const step = Math.round(parseBig(sm[1]));
+    const loss = parseFloat(lm[1]);
+    if (!isNaN(step) && !isNaN(loss)) trainSeries.push({ step, loss });
+    if (trainSeries.length > 5000) trainSeries = trainSeries.slice(-5000);
+  }
   if (trainLog.length > 200) trainLog = trainLog.slice(-200);
 }
 function trainStatus() {
@@ -202,17 +219,100 @@ function startTrain(opts) {
     trainProc = null;
     return { ok: false, message: '启动失败（本机可能无 bash / 训练环境）：' + e.message };
   }
-  trainProc.stdout.on('data', pushTrainLog);
-  trainProc.stderr.on('data', pushTrainLog);
-  trainProc.on('exit', (code) => { pushTrainLog('[训练进程退出 code=' + code + ']'); trainProc = null; });
-  trainProc.on('error', (err) => { pushTrainLog('[进程错误] ' + err.message); trainProc = null; });
-  return { ok: true, message: '训练已启动' };
+  const outBuf = streamLines(pushTrainLog);
+  const errBuf = streamLines(pushTrainLog);
+  trainProc.stdout.on('data', outBuf);
+  trainProc.stderr.on('data', errBuf);
+  trainProc.on('exit', (code) => { outBuf.flush(); errBuf.flush(); pushTrainLog('[训练进程退出 code=' + code + ']'); trainProc = null; });
+  trainProc.on('error', (err) => { pushTrainLog('[进程错误：本机可能无 bash / 训练环境] ' + err.message); trainProc = null; });
+  return { ok: true, message: '训练已启动（真训练若起不来，看下方日志）' };
 }
 function stopTrain() {
   if (!trainProc) return { ok: false, message: '没有在跑的训练' };
   trainProc.kill('SIGINT');
   pushTrainLog('>>> 已发送停止信号 (SIGINT)');
   return { ok: true, message: '已请求停止训练' };
+}
+
+// [Added by fanhao375 2026-06-30] 采数据站后端：扫相机 + 起 lerobot-record（照搬遥操/训练范式）
+// 解析 stdout 的 "Recording episode N" / "Encoding episode N" → 当前条数 + 录制/编码相位（坑：编码冻结期 601 卡住=正常）。
+function listCameras() {
+  if (os.platform() !== 'linux') {
+    return { available: false, note: '相机扫描仅原生 Linux 有效（采集要在接臂+相机的机器人机上跑本服务）', byId: [], byPath: [] };
+  }
+  const scan = (dir) => {
+    try { return fs.readdirSync(dir).filter((n) => /video/i.test(n)).map((n) => dir + '/' + n).sort(); }
+    catch (e) { return []; }
+  };
+  const byId = scan('/dev/v4l/by-id');
+  const byPath = scan('/dev/v4l/by-path');
+  return { available: byId.length > 0 || byPath.length > 0, byId, byPath };
+}
+
+const RECORD_SCRIPT = process.env.RECORD_SCRIPT
+  || path.resolve(ROOT, '..', '..', 'tools', 'lerobot_native_linux', 'start_record.sh');
+let recordProc = null;
+let recordLog = [];
+let recordEpisode = null; // 最近一条 "Recording episode N"（0 起）
+let recordPhase = null;   // 'recording' | 'encoding'
+let recordJob = null;     // {dataset, task, numEpisodes, mock, startedAt}
+function pushRecordLog(line) { // 单行（M4：streamLines 已按行缓冲，跨 chunk 不丢点）
+  line = String(line);
+  if (!line.trim()) return;
+  recordLog.push(line);
+  const rm = line.match(/Recording episode\s+(\d+)/i);
+  const em = line.match(/Encoding episode\s+(\d+)/i);
+  if (rm) { recordEpisode = parseInt(rm[1], 10); recordPhase = 'recording'; }
+  else if (em) { recordPhase = 'encoding'; }
+  if (recordLog.length > 200) recordLog = recordLog.slice(-200);
+}
+function recordStatus() {
+  return {
+    running: !!recordProc, host: os.platform(), script: RECORD_SCRIPT, job: recordJob,
+    episode: recordEpisode, phase: recordPhase,
+    total: recordJob ? recordJob.numEpisodes : null,
+    log: recordLog.slice(-30)
+  };
+}
+function startRecord(opts) {
+  if (recordProc) return { ok: false, message: '已有采集在跑' };
+  if (teleopProc) return { ok: false, message: '遥操作在跑，先停遥操作（与采集抢同一串口/臂）' };
+  if (!fs.existsSync(RECORD_SCRIPT)) return { ok: false, message: '找不到 start_record.sh：' + RECORD_SCRIPT };
+  opts = opts || {};
+  const env = Object.assign({}, process.env);
+  if (opts.dataset) env.DATASET_REPO_ID = String(opts.dataset);
+  if (opts.task) env.SINGLE_TASK = String(opts.task);
+  if (opts.episodes) env.NUM_EPISODES = String(opts.episodes);
+  if (opts.episodeTime) env.EPISODE_TIME_S = String(opts.episodeTime);
+  if (opts.resetTime) env.RESET_TIME_S = String(opts.resetTime);
+  if (opts.follower) env.FOLLOWER_PORT = String(opts.follower);
+  if (opts.leader) env.LEADER_PORT = String(opts.leader);
+  if (opts.top) env.TOP_CAM = String(opts.top);
+  if (opts.wrist) env.WRIST_CAM = String(opts.wrist);
+  if (opts.resume) env.RESUME = '1';
+  if (opts.mock) env.RECORD_MOCK = '1';
+  recordLog = []; recordEpisode = null; recordPhase = null;
+  recordJob = { dataset: opts.dataset || '默认', task: opts.task || '', numEpisodes: Number(opts.episodes) || null, mock: !!opts.mock, startedAt: Date.now() };
+  pushRecordLog('>>> 启动采集' + (opts.mock ? '（演示 mock）' : '') + '：数据集=' + recordJob.dataset + ' 目标条数=' + (opts.episodes || '默认') + '。人站旁边，手放急停旁。');
+  try {
+    recordProc = spawn('bash', [RECORD_SCRIPT], { cwd: path.dirname(RECORD_SCRIPT), env });
+  } catch (e) {
+    recordProc = null;
+    return { ok: false, message: '启动失败（本机可能无 bash / lerobot 环境）：' + e.message };
+  }
+  const outBuf = streamLines(pushRecordLog);
+  const errBuf = streamLines(pushRecordLog);
+  recordProc.stdout.on('data', outBuf);
+  recordProc.stderr.on('data', errBuf);
+  recordProc.on('exit', (code) => { outBuf.flush(); errBuf.flush(); pushRecordLog('[采集进程退出 code=' + code + ']'); recordProc = null; recordPhase = null; });
+  recordProc.on('error', (err) => { pushRecordLog('[进程错误：本机可能无 bash / lerobot 环境] ' + err.message); recordProc = null; });
+  return { ok: true, message: '采集已启动（真采集若起不来，看下方日志）' };
+}
+function stopRecord() {
+  if (!recordProc) return { ok: false, message: '没有在跑的采集' };
+  recordProc.kill('SIGINT'); // 等同 ESC：停止收尾（注意 Windows 无 POSIX 信号，停子进程靠本机为 Linux）
+  pushRecordLog('>>> 已发送停止信号 (SIGINT，等同 ESC 收尾)');
+  return { ok: true, message: '已请求停止采集' };
 }
 
 // [Added by fanhao375 2026-06-29] 遥操作控制端点安全闸：仅本机 + POST + 同源
@@ -313,6 +413,35 @@ function requestHandler(req, res) {
     return;
   }
 
+  // [Added by fanhao375 2026-06-30] 采数据站：扫相机 / 状态 / 起 / 停（start|stop 过安全闸，真机写）
+  if (urlPath === '/api/cameras') {
+    sendJson(res, 200, listCameras());
+    return;
+  }
+  if (urlPath === '/api/record/status') {
+    sendJson(res, 200, recordStatus());
+    return;
+  }
+  if (urlPath === '/api/record/start') {
+    if (!teleopGuard(req, res)) return;
+    const q = new URL(req.url, 'http://x').searchParams;
+    const r = startRecord({
+      dataset: q.get('dataset'), task: q.get('task'), episodes: q.get('episodes'),
+      episodeTime: q.get('episodeTime'), resetTime: q.get('resetTime'),
+      follower: q.get('follower'), leader: q.get('leader'),
+      top: q.get('top'), wrist: q.get('wrist'),
+      resume: q.get('resume') === '1', mock: q.get('mock') === '1'
+    });
+    sendJson(res, 200, Object.assign(r, { status: recordStatus() }));
+    return;
+  }
+  if (urlPath === '/api/record/stop') {
+    if (!teleopGuard(req, res)) return;
+    const r = stopRecord();
+    sendJson(res, 200, Object.assign(r, { status: recordStatus() }));
+    return;
+  }
+
   if (urlPath === '/api/urdf') {
     sendFile(res, URDF_FILE);
     return;
@@ -340,7 +469,17 @@ function requestHandler(req, res) {
 }
 
 // [Added by fanhao375 2026-06-30] GPU 监控：训练站第一块真功能，nvidia-smi → JSON（无 GPU 诚实报错）
+// [M5 修复] execSync('nvidia-smi') 同步阻塞事件循环；GPU 卡每 2s 轮询 + 训练每 1s 轮询会互相拖。
+// 加 1.5s 结果缓存：多个轮询/页面共享一次采样，避免事件循环被反复阻塞。
+let gpuCache = null, gpuCacheAt = 0;
 function gpuInfo() {
+  const now = Date.now();
+  if (gpuCache && (now - gpuCacheAt) < 1500) return gpuCache;
+  gpuCache = gpuInfoRaw();
+  gpuCacheAt = now;
+  return gpuCache;
+}
+function gpuInfoRaw() {
   try {
     const fields = 'name,temperature.gpu,utilization.gpu,utilization.memory,memory.used,memory.total,power.draw,power.limit,clocks.sm,fan.speed';
     const out = execSync(`nvidia-smi --query-gpu=${fields} --format=csv,noheader,nounits`, { encoding: 'utf8', timeout: 4000 });
