@@ -1,11 +1,13 @@
-// [Modified by fanhao375 2026-06-30] bump ->v9（HTML 文档改网络优先：cockpit.html/train.html 等页面改动立即可见，离线才回退缓存）
-const CACHE_NAME = 'rebot-arm-pwa-v9';
+// [Modified by fanhao375 2026-06-30] bump ->v10（新增站点公共外壳 station-shell.css/js，训/采/看 共用导航栏与骨架）
+const CACHE_NAME = 'rebot-arm-pwa-v10';
 const APP_SHELL = [
   '/',
   '/index.html',
   '/manifest.webmanifest',
   '/favicon.png',
   '/css/rebot-sim.css',
+  '/css/station-shell.css',
+  '/js/station-shell.js',
   '/js/pwa.js',
   '/js/rebot-sim.js?v=20260520-cn-status',
   '/js/ros/rebot-ros-client.js?v=20260520-cn-status',

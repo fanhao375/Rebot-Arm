@@ -1,0 +1,34 @@
+/* reBot 驾驶舱 · 站点公共外壳样式
+   [Added by fanhao375 2026-06-30] 训/采/看 等"叶子站"页面共用的骨架：配色变量 + 左导航栏 + 顶栏 + 基础布局。
+   配合 /js/station-shell.js（渲染导航栏，解锁新站只改那一处）。
+   注：cockpit.html 是带 3D + 站内视图切换的特例，不走这套共享外壳（它的 rail 是 SPA 内部 toggle）。
+   各页只保留自己独有的样式（gpu-card / job / chart / ep-grid / ds / pit 等）。 */
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+:root{
+  --bg:#0A0D0C;--rail:rgba(7,11,9,.92);--chrome:rgba(8,12,10,.96);
+  --text:#fff;--text2:rgba(255,255,255,.6);--text3:rgba(255,255,255,.42);
+  --line:rgba(255,255,255,.08);--surface:rgba(255,255,255,.05);--surface-bd:rgba(255,255,255,.1);
+  --card:rgba(255,255,255,.04);--card-bd:rgba(255,255,255,.08);
+  --accent:#2DE08A;--accent-ink:#06241A;--accent-text:#3DF0A0;--accent-soft:rgba(45,224,138,.14);--accent-soft-bd:rgba(45,224,138,.32);
+  --warn:#FFB341;--info:#8FC0FF;--danger:#FF8A92;--blue:#5AA9FF;--purple:#B98AFF;
+}
+body{background:var(--bg);color:var(--text);font-family:'Space Grotesk','PingFang SC','Microsoft YaHei',system-ui,sans-serif;font-size:13px}
+.mono{font-family:'IBM Plex Mono',monospace}
+.app{min-height:100vh;display:flex}
+
+.rail{width:64px;flex:none;background:var(--rail);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:14px 0;gap:4px;position:sticky;top:0;height:100vh}
+.rail .logo{width:36px;height:36px;border-radius:11px;background:linear-gradient(145deg,#3DF0A0,#15A862);display:flex;align-items:center;justify-content:center;color:#062317;font-weight:700;font-size:12px;margin-bottom:6px}
+.rail a,.rail button{font-family:inherit;cursor:pointer;width:40px;height:38px;border-radius:11px;border:none;background:transparent;color:var(--text3);font-size:14px;display:flex;align-items:center;justify-content:center;text-decoration:none}
+.rail a.sm,.rail button.sm{font-size:11px;font-weight:600}
+.rail a.active,.rail button.active{border:1px solid var(--accent-soft-bd);background:var(--accent-soft);color:var(--accent-text);font-weight:600}
+.rail a.locked,.rail button.locked{opacity:.55;cursor:default}
+.rail .div{width:30px;height:1px;background:var(--line);margin:4px 0}
+
+.main{flex:1;min-width:0;display:flex;flex-direction:column;min-height:100vh}
+.topbar{height:52px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 18px;background:var(--chrome);border-bottom:1px solid var(--line)}
+.topbar .ttl{font-size:15px;font-weight:600}
+.topbar .sub{font-size:11px;color:var(--text3);margin-left:10px}
+.topbar .upd,.topbar .msg{font-size:11px;color:var(--text3);font-family:'IBM Plex Mono',monospace}
+
+.body{flex:1;overflow-y:auto;padding:22px 26px}
