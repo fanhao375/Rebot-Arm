@@ -11,6 +11,7 @@
     { label: '装', title: '装配（文档）', locked: true },
     { label: '连', title: '连接', locked: true },
     { label: '▦', title: '玩 · 驾驶舱', href: '/cockpit.html', key: 'console' },
+    { label: '3D', title: '3D 物理仿真 · 机器人库（浏览器内 MuJoCo）', href: '/sim3d/sim3d.html', key: 'sim3d' },
     { label: '采', title: '采数据', href: '/record.html', key: 'record' },
     { label: '看', title: '看数据', href: '/data.html', key: 'data' },
     { label: '训', title: '训练', href: '/train.html', key: 'train' },

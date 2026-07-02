@@ -1,5 +1,5 @@
-// [Modified by fanhao375 2026-06-30] bump ->v10（新增站点公共外壳 station-shell.css/js，训/采/看 共用导航栏与骨架）
-const CACHE_NAME = 'rebot-arm-pwa-v10';
+// [Modified by fanhao375 2026-07-01] bump ->v11（新增 /sim3d/ 3D 物理仿真页，其资源走网络优先）
+const CACHE_NAME = 'rebot-arm-pwa-v11';
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -51,6 +51,21 @@ self.addEventListener('fetch', (event) => {
   // [Modified by fanhao375 2026-06-30] HTML 文档（页面）网络优先：保证 cockpit.html/train.html 等页面改动立即生效，离线回退缓存
   const isDoc = request.mode === 'navigate' || request.destination === 'document' || url.pathname.endsWith('.html');
   if (isDoc) {
+    event.respondWith(
+      fetch(request).then((response) => {
+        if (response && response.status === 200) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+        }
+        return response;
+      }).catch(() => caches.match(request))
+    );
+    return;
+  }
+
+  // [Added by fanhao375 2026-07-01] /sim3d/ 3D 仿真页在积极开发，其 JS/MJCF/网格走网络优先：改了立即生效，离线回退缓存。
+  // （跨域 CDN 的 three/mujoco-js 因 origin 不同在上面 line 44 已直接放行，不进 SW 缓存。）
+  if (url.pathname.startsWith('/sim3d/')) {
     event.respondWith(
       fetch(request).then((response) => {
         if (response && response.status === 200) {

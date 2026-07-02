@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>reBot 驾驶舱 · 3D 物理仿真（机器人库）</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0e1116" />
+  <style>
+    html, body { margin: 0; height: 100%; background: #0e1116; overflow: hidden; touch-action: none;
+      font-family: -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; -webkit-user-select: none; user-select: none; }
+    canvas { display: block; }
+    #topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 20; display: flex; align-items: center; gap: 14px;
+      padding: 8px 14px; color: #e6edf3; background: linear-gradient(180deg, rgba(14,17,22,.92), rgba(14,17,22,.55) 80%, transparent);
+      pointer-events: none; }
+    #topbar a, #topbar .pill { pointer-events: auto; }
+    #topbar .back { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; color: #e6edf3;
+      background: #1b2230; border: 1px solid #2b3444; border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+    #topbar .back:hover { background: #232c3d; }
+    #topbar .title { font-weight: 600; font-size: 15px; }
+    #topbar .title small { color: #8b97a7; font-weight: 400; margin-left: 6px; font-size: 12px; }
+    #sim-status { pointer-events: none; margin-left: auto; color: #ffd782; font-size: 13px; background: rgba(0,0,0,.35);
+      border: 1px solid #3a3323; border-radius: 8px; padding: 6px 10px; }
+    #sim-note { position: fixed; left: 14px; bottom: 12px; z-index: 20; max-width: 46ch; color: #9aa7b6; font-size: 12px;
+      line-height: 1.5; background: rgba(14,17,22,.6); border: 1px solid #232c3d; border-radius: 8px; padding: 8px 10px; }
+    #hint { position: fixed; right: 14px; bottom: 12px; z-index: 20; color: #6f7c8c; font-size: 11.5px; text-align: right; line-height: 1.6; }
+  </style>
+
+  <!-- importmap 兜底（旧浏览器）；现代 Chrome/Edge/Firefox 原生支持 importmap，此 shim 无害 -->
+  <script async src="https://unpkg.com/es-module-shims@1.10.0/dist/es-module-shims.js"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.181.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.181.0/examples/jsm/",
+      "mujoco-js": "https://unpkg.com/mujoco-js@0.0.7/dist/mujoco_wasm.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="topbar">
+    <a class="back" href="/cockpit.html" title="返回驾驶舱">← 驾驶舱</a>
+    <span class="title">3D 物理仿真 · 机器人库<small>浏览器内真 MuJoCo（WASM）</small></span>
+    <span id="sim-status">正在下载物理引擎（首次约 10MB，请稍候）…</span>
+  </div>
+
+  <div id="sim-note"></div>
+  <div id="hint">左键拖=转视角 · 滚轮=缩放 · 右键拖=平移<br>拖模型=施力 · 空格=暂停 · 右上滑块=驱动关节</div>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

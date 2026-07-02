@@ -1,0 +1,34 @@
+{
+  "scene": "ah_scene.xml",
+  "xml": [
+    "ah_scene.xml",
+    "robot.xml",
+    "keyframes.xml"
+  ],
+  "meshDir": "assets",
+  "meshes": [
+    "bushing_0608_04.stl",
+    "custom_servo_horn.stl",
+    "distal.stl",
+    "distal_shell.stl",
+    "finger_frame_1.stl",
+    "finger_frame_2.stl",
+    "gimbal.stl",
+    "l_hand_plate.stl",
+    "l_wrist_interface.stl",
+    "link.stl",
+    "m2_rod_l18.stl",
+    "parallel_pin_2_x_10__fee063fca0c8b40e46bbc4ffff61d999.stl",
+    "parallel_pin_2_x_16__da4b7ddbe9d803fe3fbc70f2e822b99b.stl",
+    "ph_pan_head_screw_m2x0_40_x_10__2803432263e518bbd16bccbbef8784ed.stl",
+    "plain_washer_large_grade_a_m2_5__9a369f0dc77bf9c598cdf3fb468977e5.stl",
+    "proximal.stl",
+    "proximal_shell.stl",
+    "rotule_ball.stl",
+    "rotule_lever.stl",
+    "scs0009.stl",
+    "spacer.stl",
+    "std00333_plast_tcb_torx_2_5x8__configuration_copy_of_default.stl",
+    "std00447_thermoplastique_m2_5x6__configuration_default.stl"
+  ]
+}
